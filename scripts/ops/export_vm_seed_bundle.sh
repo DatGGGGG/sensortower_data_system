@@ -47,6 +47,13 @@ else
   docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$DUMP_PATH"
 fi
 
+echo "Validating Postgres custom dump..."
+if ! docker exec -i "$POSTGRES_CONTAINER" pg_restore -l < "$DUMP_PATH" >/dev/null; then
+  echo "Postgres dump is invalid or incomplete: ${DUMP_PATH}"
+  echo "Delete it or rerun without VM_SEED_REUSE_EXISTING_DUMP=1 to create a fresh dump."
+  exit 67
+fi
+
 echo "Collecting filesystem seed file list..."
 (
   cd "$ROOT_DIR"

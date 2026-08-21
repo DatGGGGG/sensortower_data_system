@@ -79,6 +79,13 @@ for key in ("postgres_dump", "filesystem_archive"):
 print("checksums ok")
 PY
 
+echo "Validating Postgres custom dump..."
+if ! docker run --rm -i postgres:16 pg_restore -l < "$DUMP_PATH" >/dev/null; then
+  echo "Postgres dump is invalid or incomplete: ${DUMP_PATH}"
+  echo "Recreate the seed bundle from local production without VM_SEED_REUSE_EXISTING_DUMP=1."
+  exit 67
+fi
+
 echo "Starting VM Postgres service if needed..."
 (
   cd "${ROOT_DIR}/modeling_layer"
