@@ -86,6 +86,22 @@ echo "Starting VM Postgres service if needed..."
 )
 
 echo "Checking Postgres readiness..."
+ready=0
+for attempt in $(seq 1 60); do
+  if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  echo "Postgres is not ready yet; waiting... (${attempt}/60)"
+  sleep 2
+done
+
+if [[ "$ready" -ne 1 ]]; then
+  echo "Postgres did not become ready within 120 seconds."
+  docker logs --tail 120 "$POSTGRES_CONTAINER" || true
+  exit 70
+fi
+
 ops_run docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 echo "Restoring Postgres dump. This is destructive for objects present in the dump."
