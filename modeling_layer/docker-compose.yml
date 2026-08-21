@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: vn-strategy-modeling-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mydb
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data:/data
+      - ../data:/source_data:ro
+      - ./sql:/sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  api:
+    build:
+      context: ./api
+    container_name: vn-strategy-modeling-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/mydb
+      API_NAME: Strategy Data API
+      API_VERSION: 0.1.0
+      API_PUBLIC_BASE_URL: ${API_PUBLIC_BASE_URL:-}
+      API_CHART_ARTIFACT_DIR: ${API_CHART_ARTIFACT_DIR:-}
+      API_CHART_TTL_HOURS: ${API_CHART_TTL_HOURS:-}
+      API_CHART_MAX_ROWS: ${API_CHART_MAX_ROWS:-}
+      API_CHART_SIGNING_SECRET: ${API_CHART_SIGNING_SECRET:-}
+    ports:
+      - "8001:8000"
+  mcp:
+    build:
+      context: ./mcp
+    container_name: vn-strategy-modeling-mcp
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      MCP_SHARED_TOKEN: ${MCP_SHARED_TOKEN:-}
+      WAREHOUSE_API_BASE_URL: ${WAREHOUSE_API_BASE_URL:-http://api:8000}
+      WAREHOUSE_API_KEY: ${WAREHOUSE_API_KEY:-}
+      CATALOG_API_KEY: ${CATALOG_API_KEY:-}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/mydb
+      MCP_REQUEST_TIMEOUT_SECONDS: ${MCP_REQUEST_TIMEOUT_SECONDS:-30}
+    ports:
+      - "${MCP_PORT:-8002}:8000"
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: vn-strategy-modeling-ngrok
+    restart: unless-stopped
+    profiles:
+      - ngrok
+    depends_on:
+      - api
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    command:
+      - http
+      - --url=${NGROK_URL}
+      - http://api:8000
+    ports:
+      - "4040:4040"
+  mcp-ngrok:
+    image: ngrok/ngrok:latest
+    container_name: vn-strategy-modeling-mcp-ngrok
+    restart: unless-stopped
+    profiles:
+      - mcp-ngrok
+    depends_on:
+      - mcp
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    command:
+      - http
+      - --url=${NGROK_MCP_URL}
+      - http://mcp:8000
+    ports:
+      - "4041:4040"
+volumes:
+  pgdata:
