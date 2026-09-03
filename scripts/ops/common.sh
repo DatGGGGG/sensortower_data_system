@@ -194,6 +194,24 @@ ops_require_dir() {
   fi
 }
 
+ops_require_free_disk_gb() {
+  local required_gb="$1"
+  local available_kb
+  local required_kb=$((required_gb * 1024 * 1024))
+
+  available_kb="$(df -Pk "$DATA_DIR" | awk 'NR == 2 {print $4}')"
+  if [[ -z "$available_kb" || ! "$available_kb" =~ ^[0-9]+$ ]]; then
+    echo "Unable to determine free disk space for ${DATA_DIR}."
+    exit 70
+  fi
+
+  echo "Disk preflight: $((available_kb / 1024 / 1024)) GiB available; ${required_gb} GiB required."
+  if (( available_kb < required_kb )); then
+    echo "Insufficient disk space. Refusing to start ${RUN_TYPE} safely."
+    exit 28
+  fi
+}
+
 ops_run() {
   echo "[$(ops_now)] RUN: $*"
   "$@"

@@ -372,7 +372,10 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _write_named_result(ctx: PipelineContext, name: str, payload: dict[str, Any]) -> str:
-    result_path = _run_log_dir(ctx) / f"{name}.json"
+    stage_suffix = ""
+    if name == "run_source_base_pipeline" and payload.get("stage_selection") not in {None, "all"}:
+        stage_suffix = f"_{payload['stage_selection']}"
+    result_path = _run_log_dir(ctx) / f"{name}{stage_suffix}.json"
     _write_json(result_path, payload)
     return str(result_path.resolve())
 
@@ -2633,19 +2636,37 @@ def _merge_partitioned_json_dataset_into_current_streaming(
         for partition_key, partition in manifest_entries.items()
     }
 
-    new_rows_by_partition: dict[tuple[int, int], dict[tuple[str, str, str], dict[str, Any]]] = {}
-    for row in _iter_json_array_items(run_output_path):
-        date_text = str(row.get(record_date_field) or "")
-        partition_key = _time_series_partition_key_from_date_text(date_text)
-        partition_rows = new_rows_by_partition.setdefault(partition_key, {})
-        partition_rows[key_builder(row)] = row
+    spool_prefix = f".{run_output_path.stem}_{dataset_name}_merge_"
+    for stale_spool_dir in run_output_path.parent.glob(f"{spool_prefix}*"):
+        if stale_spool_dir.is_dir():
+            shutil.rmtree(stale_spool_dir, ignore_errors=True)
+    spool_dir = Path(tempfile.mkdtemp(prefix=spool_prefix, dir=str(run_output_path.parent)))
+    spooled_partition_keys: set[tuple[int, int]] = set()
+    spool_handles: dict[tuple[int, int], Any] = {}
+    try:
+        for row in _iter_json_array_items(run_output_path):
+            date_text = str(row.get(record_date_field) or "")
+            partition_key = _time_series_partition_key_from_date_text(date_text)
+            spooled_partition_keys.add(partition_key)
+            handle = spool_handles.get(partition_key)
+            if handle is None:
+                handle = open(spool_dir / f"{partition_key[0]:04d}-{partition_key[1]:02d}.ndjson", "a", encoding="utf-8")
+                spool_handles[partition_key] = handle
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    finally:
+        for handle in spool_handles.values():
+            handle.close()
 
     touched_partition_keys = set(_month_keys_between(overlap_start, overlap_end))
-    touched_partition_keys.update(new_rows_by_partition.keys())
+    touched_partition_keys.update(spooled_partition_keys)
 
     for partition_key in sorted(touched_partition_keys):
+        partition_new_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+        spool_path = spool_dir / f"{partition_key[0]:04d}-{partition_key[1]:02d}.ndjson"
+        if spool_path.exists():
+            for row in _iter_ndjson_items(spool_path):
+                partition_new_rows[key_builder(row)] = row
         existing_path = _time_series_partition_path(current_path, partition_key)
-        partition_new_rows = dict(new_rows_by_partition.get(partition_key, {}))
         partition_new_keys = set(partition_new_rows)
         consumed_partition_new_keys: set[tuple[str, str, str]] = set()
         if not existing_path.exists() and not partition_new_rows:
@@ -2737,6 +2758,11 @@ def _merge_partitioned_json_dataset_into_current_streaming(
             if existing_path.exists():
                 existing_path.unlink()
             next_partition_stats.pop(partition_key, None)
+
+        if spool_path.exists():
+            spool_path.unlink()
+
+    shutil.rmtree(spool_dir, ignore_errors=True)
 
     next_manifest = _time_series_manifest_from_partition_stats(
         next_partition_stats,
@@ -3867,7 +3893,7 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                     )
                     fact_country_codes = _fact_country_codes(config, ctx)
                     df_app_full_info = pd.read_json(outputs["app_full_info"], lines=True)
-                    app_performance = lsdp.create_table_app_performance_grouped_by_game_daily(
+                    app_performance = lsdp.create_table_app_performance_checkpointed(
                         api_key,
                         ctx.base_url,
                         str_start_date=window["start_date"],
@@ -3877,7 +3903,7 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                         export_path=str(outputs["app_performance"]),
                         country_codes=fact_country_codes,
                     )
-                    row_count = int(len(app_performance))
+                    row_count = int(app_performance["row_count"])
                     del app_performance
                     gc.collect()
                     merge_metrics = _merge_app_performance_into_current_streaming(
@@ -3893,7 +3919,8 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                         window=window,
                         dataset_name="app_performance_daily",
                         expired_at=_utc_now_iso(),
-                        drop_missing_in_window=_normalize_load_mode(ctx.facts_load_mode) != BACKFILL_LOAD_MODE,
+                        drop_missing_in_window=_normalize_load_mode(ctx.facts_load_mode)
+                        not in {BACKFILL_LOAD_MODE, QUARTERLY_LOAD_MODE},
                     )
                     return {
                         "row_count": row_count,
@@ -3952,7 +3979,8 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                         window=window,
                         dataset_name="app_active_users",
                         expired_at=_utc_now_iso(),
-                        drop_missing_in_window=_normalize_load_mode(ctx.facts_load_mode) != BACKFILL_LOAD_MODE,
+                        drop_missing_in_window=_normalize_load_mode(ctx.facts_load_mode)
+                        not in {BACKFILL_LOAD_MODE, QUARTERLY_LOAD_MODE},
                     )
                     return {
                         "row_count": row_count,

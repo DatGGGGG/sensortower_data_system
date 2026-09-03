@@ -20,6 +20,7 @@ import ast
 import csv
 import shutil
 import tempfile
+import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Iterable, Sequence
 
@@ -165,6 +166,7 @@ def _get_with_retry(
     url: str,
     *,
     params: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
     timeout: TimeoutType = (10, 60),
     max_retries: int = 6,
     base_sleep: float = 1.5,
@@ -181,7 +183,7 @@ def _get_with_retry(
     while True:
         attempt += 1
         try:
-            resp = requests.get(url, params=params, timeout=timeout)
+            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
 
             # Retryable HTTP statuses
             if resp.status_code in (429, 500, 502, 503, 504):
@@ -720,7 +722,195 @@ def get_apps_performance(api_key, base_url, os, app_ids, country_code, granulari
 
             count += 1
         
-    return all_results 
+    return all_results
+
+
+def create_table_app_performance_checkpointed(
+    api_key,
+    base_url,
+    str_start_date,
+    str_end_date,
+    df_app_full_info,
+    json_export_path,
+    export_path=None,
+    country_codes="VN",
+    app_chunk_size: int = 100,
+    request_timeout: int = 120,
+    max_retries: int = 6,
+):
+    """Fetch App Performance without retaining the full response in memory.
+
+    Every API request is written atomically to a deterministic cache file. A
+    retry reuses completed requests, while the final JSON array is assembled
+    as a stream and atomically promoted only after every request succeeds.
+    """
+    if export_path is None:
+        timestamp = int(time.time())
+        export_path = f"{json_export_path}/st_app_performance_daily_{timestamp}.json"
+
+    export_path_obj = Path(export_path)
+    cache_dir = export_path_obj.parent / f".{export_path_obj.stem}_performance_tmp"
+    manifest_path = cache_dir / "manifest.json"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    app_ids_by_os = {
+        os_name: sorted(
+            {
+                str(value)
+                for value in df_app_full_info.loc[df_app_full_info["os"] == os_name, "app_id"]
+                if pd.notna(value)
+            }
+        )
+        for os_name in ("ios", "android")
+    }
+    request_config = {
+        "start_date": str_start_date,
+        "end_date": str_end_date,
+        "country_codes": country_codes,
+        "app_chunk_size": int(app_chunk_size),
+        "app_ids_by_os": app_ids_by_os,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(request_config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    completion_path = export_path_obj.with_suffix(export_path_obj.suffix + ".complete.json")
+    if export_path_obj.exists() and completion_path.exists():
+        try:
+            completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        except Exception:
+            completion = {}
+        if (
+            completion.get("fingerprint") == fingerprint
+            and completion.get("size_bytes") == export_path_obj.stat().st_size
+        ):
+            row_count = int(completion.get("row_count", 0))
+            print(f"Reusing completed App Performance artifact: {export_path_obj}")
+            return {
+                "output_path": str(export_path_obj),
+                "row_count": row_count,
+                "request_count": int(completion.get("request_count", 0)),
+                "reused_completed_artifact": True,
+            }
+
+    manifest = {}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+    if manifest.get("fingerprint") != fingerprint:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {"fingerprint": fingerprint, "request_config": request_config, "completed": {}}
+
+    def write_manifest() -> None:
+        tmp_path = manifest_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp_path, manifest_path)
+
+    request_specs = []
+    for os_name, app_ids in app_ids_by_os.items():
+        for chunk_number, app_chunk in enumerate(chunk_list(app_ids, app_chunk_size), start=1):
+            cache_path = cache_dir / f"{os_name}_{chunk_number:06d}.ndjson"
+            request_specs.append((os_name, chunk_number, list(app_chunk), cache_path))
+
+    print("Query app performance data pieces (checkpointed streaming)...")
+    print(f"Countries: {country_codes} | Start: {str_start_date} | End: {str_end_date}")
+    progress = tqdm(total=len(request_specs), desc="Performance requests")
+    try:
+        for os_name, chunk_number, app_chunk, cache_path in request_specs:
+            cache_key = f"{os_name}:{chunk_number}"
+            completed = manifest["completed"].get(cache_key)
+            if completed and cache_path.exists() and cache_path.stat().st_size == completed.get("size_bytes"):
+                progress.update(1)
+                continue
+
+            url = f"{base_url}/v1/{os_name}/sales_report_estimates"
+            params = {
+                "os": os_name,
+                "app_ids": ",".join(app_chunk),
+                "countries": country_codes,
+                "date_granularity": "daily",
+                "start_date": str_start_date,
+                "end_date": str_end_date,
+            }
+            response = _get_with_retry(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                params=params,
+                timeout=request_timeout,
+                max_retries=max_retries,
+                base_sleep=1.5,
+                max_sleep=60,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"App Performance API failed: os={os_name}, chunk={chunk_number}, "
+                    f"status={response.status_code}, body={response.text[:800]}"
+                )
+            payload = response.json()
+            rows = payload.get("data", []) if isinstance(payload, dict) else payload
+            if not isinstance(rows, list):
+                raise RuntimeError(
+                    f"Unexpected App Performance response: os={os_name}, chunk={chunk_number}, "
+                    f"type={type(rows).__name__}"
+                )
+
+            tmp_cache_path = cache_path.with_suffix(".ndjson.tmp")
+            with tmp_cache_path.open("w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            os.replace(tmp_cache_path, cache_path)
+            manifest["completed"][cache_key] = {
+                "row_count": len(rows),
+                "size_bytes": cache_path.stat().st_size,
+            }
+            write_manifest()
+            progress.update(1)
+    finally:
+        progress.close()
+
+    output_tmp = export_path_obj.with_suffix(export_path_obj.suffix + ".tmp")
+    row_count = 0
+    with output_tmp.open("w", encoding="utf-8") as output_handle:
+        output_handle.write("[\n")
+        first = True
+        for _, _, _, cache_path in request_specs:
+            with cache_path.open("r", encoding="utf-8") as cache_handle:
+                for line in cache_handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if not first:
+                        output_handle.write(",\n")
+                    output_handle.write(line)
+                    first = False
+                    row_count += 1
+        output_handle.write("\n]\n")
+    os.replace(output_tmp, export_path_obj)
+    completion_tmp = completion_path.with_suffix(completion_path.suffix + ".tmp")
+    completion_tmp.write_text(
+        json.dumps(
+            {
+                "fingerprint": fingerprint,
+                "row_count": row_count,
+                "request_count": len(request_specs),
+                "size_bytes": export_path_obj.stat().st_size,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(completion_tmp, completion_path)
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    print(f"Exported {row_count:,} App Performance rows: {export_path_obj}")
+    return {
+        "output_path": str(export_path_obj),
+        "row_count": row_count,
+        "request_count": len(request_specs),
+    }
+
 
 def get_monthly_app_performance_single_app_id(api_key, base_url, os, app_id, country_code, start_date, end_date):
     """

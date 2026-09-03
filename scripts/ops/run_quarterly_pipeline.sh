@@ -6,21 +6,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/common.sh"
 
+# Load project settings before choosing the stable quarterly identity. No xtrace
+# is active yet, so secrets are not printed.
+if [[ -f "${ROOT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
+
+# A quarterly retry must resolve to the same run timestamp and output paths.
+# Otherwise every retry starts a new 365-day extraction from zero.
+PERFORMANCE_END_DATE="${PERFORMANCE_END_DATE:-$(date -d '-1 days' +%F)}"
+RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date -u -d "${PERFORMANCE_END_DATE}T00:00:00Z" +%s)}"
+RUN_ID="${RUN_ID:-scheduled_quarterly_${PERFORMANCE_END_DATE//-/}}"
+
 ops_init "quarterly"
 ops_load_env
 
-# Quarterly production runs should also avoid partial same-day SensorTower data.
-# Default to the previous day unless the operator explicitly overrides it.
-if [[ -z "${PERFORMANCE_END_DATE:-}" ]]; then
-  PERFORMANCE_END_DATE="$(date -d '-1 days' +%F)"
-fi
 SNAPSHOT_REGIONS="${SNAPSHOT_REGIONS:-VN,CN,WW}"
 FACT_COUNTRY_CODES="${FACT_COUNTRY_CODES:-VN,CN,WW}"
 ops_common_defaults
 FACTS_LOAD_MODE="${FACTS_LOAD_MODE:-quarterly}"
-export FACTS_LOAD_MODE SNAPSHOT_REGIONS FACT_COUNTRY_CODES
+PERFORMANCE_BATCH_LINES="${PERFORMANCE_BATCH_LINES:-25000}"
+ACTIVE_USERS_BATCH_LINES="${ACTIVE_USERS_BATCH_LINES:-25000}"
+export FACTS_LOAD_MODE SNAPSHOT_REGIONS FACT_COUNTRY_CODES PERFORMANCE_BATCH_LINES ACTIVE_USERS_BATCH_LINES
 ops_activate_venv
 ops_acquire_pipeline_lock
+ops_require_free_disk_gb "${QUARTERLY_MIN_FREE_DISK_GB:-40}"
 ops_environment_snapshot
 
 ops_require_file "$CONFIG_PATH" "config"
@@ -31,7 +44,43 @@ if [[ "${RUN_USER_REVIEWS:-0}" == "1" ]]; then
   SOURCE_BASE_STAGES="${SOURCE_BASE_STAGES} build_user_reviews"
 fi
 
+quarterly_stage_is_complete() {
+  local result_path="$1"
+  "$(ops_python)" - "$result_path" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+if payload.get("status") != "success":
+    raise SystemExit(1)
+
+results = payload.get("stage_results") or []
+if len(results) != 1 or results[0].get("status") != "success":
+    raise SystemExit(1)
+
+outputs = results[0].get("output_files") or {}
+if not outputs:
+    raise SystemExit(1)
+for output_path in outputs.values():
+    if not output_path or not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+        raise SystemExit(1)
+PY
+}
+
 for stage_name in $SOURCE_BASE_STAGES; do
+  stage_result="${OUTPUT_ROOT}/logs/${RUN_ID}/run_source_base_pipeline_${stage_name}.json"
+  if [[ "${RESET_QUARTERLY_STATE:-0}" != "1" ]] && quarterly_stage_is_complete "$stage_result"; then
+    echo "Quarterly resume: skipping completed stage ${stage_name}."
+    continue
+  fi
+
   ops_run "$(ops_python)" "${ROOT_DIR}/scripts/run_source_base_pipeline.py" \
     --config-path "$CONFIG_PATH" \
     --input-root "$INPUT_ROOT" \
