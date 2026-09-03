@@ -14,11 +14,11 @@ ops_require_command mktemp
 
 mkdir -p "${CRON_LOG_ROOT}"
 
-weekly_entry="0 3 * * 1 bash ${ROOT_DIR}/scripts/ops/run_weekly_pipeline.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
+weekly_entry="0 3 * * 1 TRIGGER_MODE=scheduled bash ${ROOT_DIR}/scripts/ops/run_weekly_pipeline.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
 # Quarterly cadence: 00:00 on the 2nd day of Mar/Jun/Sep/Dec.
 # This refreshes data during the last month of each quarter for quarter-end
 # reporting, and December supports year-end report preparation.
-quarterly_entry="0 0 2 3,6,9,12 * bash ${ROOT_DIR}/scripts/ops/run_quarterly_pipeline.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
+quarterly_entry="0 0 2 3,6,9,12 * TRIGGER_MODE=scheduled bash ${ROOT_DIR}/scripts/ops/run_quarterly_pipeline.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
 daily_report_entry="30 8 * * * bash ${ROOT_DIR}/scripts/ops/run_daily_report.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
 weekly_report_entry="30 10 * * 1 bash ${ROOT_DIR}/scripts/ops/run_weekly_report.sh >> ${CRON_LOG_ROOT}/cron-launcher.log 2>&1"
 
@@ -35,6 +35,8 @@ awk '
   BEGIN { skip = 0 }
   /^# BEGIN VN_STRATEGY_DATA_SYSTEM$/ { skip = 1; next }
   /^# END VN_STRATEGY_DATA_SYSTEM$/ { skip = 0; next }
+  /^# BEGIN SensorTower Module$/ { skip = 1; next }
+  /^# END SensorTower Module$/ { skip = 0; next }
   /\/mnt\/d\/Coding\/vn_strategy_data_system\/scripts\/ops\/run_weekly_pipeline\.sh/ { next }
   /\/mnt\/d\/Coding\/vn_strategy_data_system\/scripts\/ops\/run_quarterly_pipeline\.sh/ { next }
   /\/mnt\/d\/Coding\/vn_strategy_data_system\/scripts\/ops\/run_daily_report\.sh/ { next }
@@ -43,6 +45,10 @@ awk '
   /\/scripts\/ops\/run_quarterly_pipeline\.sh/ && /vn_strategy_data_system/ { next }
   /\/scripts\/ops\/run_daily_report\.sh/ && /vn_strategy_data_system/ { next }
   /\/scripts\/ops\/run_weekly_report\.sh/ && /vn_strategy_data_system/ { next }
+  /\/opt\/sensortower_data_system\/scripts\/ops\/run_weekly_pipeline\.sh/ { next }
+  /\/opt\/sensortower_data_system\/scripts\/ops\/run_quarterly_pipeline\.sh/ { next }
+  /\/opt\/sensortower_data_system\/scripts\/ops\/run_daily_report\.sh/ { next }
+  /\/opt\/sensortower_data_system\/scripts\/ops\/run_weekly_report\.sh/ { next }
   skip == 0 { print }
 ' "${existing_crontab}" > "${cleaned_crontab}"
 

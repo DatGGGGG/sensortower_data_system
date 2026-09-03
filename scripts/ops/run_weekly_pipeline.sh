@@ -23,7 +23,27 @@ FACT_COUNTRY_CODES="${FACT_COUNTRY_CODES:-VN,CN,WW}"
 ops_common_defaults
 FACTS_LOAD_MODE="${FACTS_LOAD_MODE:-weekly}"
 export FACTS_LOAD_MODE SNAPSHOT_REGIONS FACT_COUNTRY_CODES
+
+# The quarterly reconciliation supersedes a weekly run whenever its Monday-to-
+# Sunday window contains the 2nd day of a quarter-end month. Keep manual
+# recovery runs available.
+if [[ "${TRIGGER_MODE}" == "scheduled" ]]; then
+  weekly_window_start="$(date +%F)"
+  for day_offset in $(seq 0 6); do
+    candidate_date="$(date -d "${weekly_window_start} +${day_offset} days" +%m-%d)"
+    case "${candidate_date}" in
+      03-02|06-02|09-02|12-02)
+        echo "Skipping scheduled weekly run: quarterly reconciliation is scheduled during this week (${candidate_date})."
+        exit 0
+        ;;
+    esac
+  done
+fi
+
 ops_activate_venv
+if [[ "${TRIGGER_MODE}" == "scheduled" ]]; then
+  export OPS_SKIP_IF_LOCKED=1
+fi
 ops_acquire_pipeline_lock
 ops_environment_snapshot
 

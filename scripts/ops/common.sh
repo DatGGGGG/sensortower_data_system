@@ -228,6 +228,10 @@ ops_acquire_pipeline_lock() {
   ops_require_command flock
   exec 200>"${LOCK_DIR}/source_base_staging_modeling.lock"
   if ! flock -n 200; then
+    if [[ "${OPS_SKIP_IF_LOCKED:-0}" == "1" ]]; then
+      echo "Skipping scheduled run because another production pipeline is active. Lock: ${LOCK_DIR}/source_base_staging_modeling.lock"
+      exit 0
+    fi
     echo "Another production pipeline run is already active. Lock: ${LOCK_DIR}/source_base_staging_modeling.lock"
     exit 75
   fi
