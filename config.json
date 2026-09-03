@@ -1,5 +1,32 @@
 {
     "TOP_GAME_ANNUAL_PERFORMANCE": "data/base/st_webdownload_annual_game_performance_1771831048.csv",
+    "TOP_GAME_ALL_HISTORY_INITIAL": "data/base/st_webdownload_annual_game_performance_1775643059.csv",
+    "TOP_GAME_SNAPSHOT_OS": "unified",
+    "TOP_GAME_SNAPSHOT_COMPARISON_ATTRIBUTE": "absolute",
+    "TOP_GAME_SNAPSHOT_TIME_RANGE": "year",
+    "TOP_GAME_SNAPSHOT_MEASURE": "revenue",
+    "TOP_GAME_SNAPSHOT_DEVICE_TYPE": "total",
+    "TOP_GAME_SNAPSHOT_CATEGORY": "0",
+    "TOP_GAME_SNAPSHOT_REGIONS": [
+        "VN",
+        "CN",
+        "WW"
+    ],
+    "FACT_COUNTRY_CODES": [
+        "VN",
+        "CN",
+        "WW"
+    ],
+    "TOP_GAME_SNAPSHOT_LIMIT": 2000,
+    "TOP_GAME_SNAPSHOT_TARGET_COUNT": 10000,
+    "TOP_GAME_SNAPSHOT_CUSTOM_FIELDS_FILTER_ID": "6a3e0b3207109dacd2eef0d8",
+    "TOP_GAME_SNAPSHOT_CUSTOM_TAGS_MODE": "include_unified_apps",
+    "TOP_GAME_SNAPSHOT_DATA_MODEL": "DM_2025_Q2",
+    "TOP_GAME_SNAPSHOT_START_YEAR": 2014,
+    "TOP_GAME_SNAPSHOT_MAX_CANDIDATE_COUNT": 100000,
+    "TOP_GAME_SNAPSHOT_POST_FILTER_MODE": "strict_platform_all_apps",
+    "TOP_GAME_SNAPSHOT_CHILD_APP_SCOPE": "active_only",
+    "INCLUDE_USER_REVIEWS_IN_BASE_FLOW": false,
     "MAPPING_PUBLISHER_TO_APPS_TOP_DOWN": "data/base/st_manualsearch_mapping_publisher_to_apps_top_down_1770810933.csv",
     "MAPPING_PUBLISHER_TO_PUBLISER_ID_AND_REVENUE_MULTIPLIER_BOTTOM_UP": "data/base/st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_1770897976.csv",
     "MAPPING_APP_TO_REVENUE_MULTIPLIER_SPECIAL_CASES": "data/base/st_mapping_app_to_revenue_multiplier_special_case_1770980794.csv",

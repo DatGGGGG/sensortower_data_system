@@ -13,11 +13,15 @@ import plotly.graph_objects as go
 import ast
 import json
 import ijson
+import sqlite3
 from tqdm import tqdm
 import os
 import ast
 import csv
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable, Sequence
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Iterable, Sequence
 
 pd.set_option('display.float_format', '{:.0f}'.format)
 
@@ -165,6 +169,7 @@ def _get_with_retry(
     max_retries: int = 6,
     base_sleep: float = 1.5,
     max_sleep: float = 60,
+    progress_logger: Optional[Callable[[str], None]] = None,
 ) -> requests.Response:
     """
     Retry on connection resets/timeouts and on 429/5xx with exponential backoff + jitter.
@@ -193,6 +198,11 @@ def _get_with_retry(
                     except Exception:
                         pass
 
+                if progress_logger is not None:
+                    progress_logger(
+                        f"HTTP {resp.status_code} from Sensor Tower on attempt {attempt}/{max_retries}; "
+                        f"retrying in {sleep_s:.1f}s"
+                    )
                 time.sleep(sleep_s)
                 continue
 
@@ -207,6 +217,11 @@ def _get_with_retry(
             if attempt >= max_retries:
                 raise
             sleep_s = min(max_sleep, base_sleep * (2 ** (attempt - 1))) + random.random()
+            if progress_logger is not None:
+                progress_logger(
+                    f"Network error on attempt {attempt}/{max_retries}: {type(e).__name__}: {e}. "
+                    f"Retrying in {sleep_s:.1f}s"
+                )
             time.sleep(sleep_s)
 
 def get_unified_app_data(api_key, base_url, app_ids):
@@ -2076,7 +2091,16 @@ def adjust_cleaned_publisher_name_and_revenue_multiplier_of_app_full_info_specia
 
     return df_app_full_info_adjusted_copy
 
-def create_table_app_performance_grouped_by_game_daily(api_key, base_url, str_start_date, str_end_date, df_app_full_info, json_export_path):
+def create_table_app_performance_grouped_by_game_daily(
+    api_key,
+    base_url,
+    str_start_date,
+    str_end_date,
+    df_app_full_info,
+    json_export_path,
+    export_path=None,
+    country_codes="VN",
+):
     # get the unified ids
     list_unified_ids = list(
         df_app_full_info['unified_app_id'].drop_duplicates()
@@ -2107,13 +2131,14 @@ def create_table_app_performance_grouped_by_game_daily(api_key, base_url, str_st
     # Query the app performance data (performance piece - each in a period, for an app)
 
     print("Query app performance data pieces...")
+    print(f"Countries: {country_codes} | Start: {str_start_date} | End: {str_end_date}")
 
     app_performance_data_ios = get_apps_performance(
         api_key, 
         base_url, 
         os = 'ios', 
         app_ids = list_app_ids_ios, 
-        country_code = 'VN', 
+        country_code = country_codes, 
         granularity = 'daily', 
         max_periods = 1000, 
         start_date = str_start_date, 
@@ -2125,7 +2150,7 @@ def create_table_app_performance_grouped_by_game_daily(api_key, base_url, str_st
         base_url, 
         os = 'android', 
         app_ids = list_app_ids_android, 
-        country_code = 'VN', 
+        country_code = country_codes, 
         granularity = 'daily', 
         max_periods = 1000, 
         start_date = str_start_date, 
@@ -2138,8 +2163,10 @@ def create_table_app_performance_grouped_by_game_daily(api_key, base_url, str_st
 
     ## export the data to json
     print("Exporting the data to json...")
-    timestamp = int(time.time())
-    with open('{}/st_app_performance_daily_{}.json'.format(json_export_path, timestamp), 'w', encoding='utf-8') as file:
+    if export_path is None:
+        timestamp = int(time.time())
+        export_path = '{}/st_app_performance_daily_{}.json'.format(json_export_path, timestamp)
+    with open(export_path, 'w', encoding='utf-8') as file:
         json.dump(app_performance_data, file, ensure_ascii=False)
 
     return app_performance_data
@@ -2179,6 +2206,8 @@ def stream_and_adjust_app_performance_daily_json_file(src_path, dst_path, df_app
 
     total_bytes = os.path.getsize(src_path)
 
+    records_written = 0
+
     with open(src_path, "rb") as src, \
         open(dst_path, "w", encoding="utf-8") as dst, \
         tqdm(total=total_bytes, unit="B", unit_scale=True, desc="Processing") as pbar:
@@ -2194,11 +2223,17 @@ def stream_and_adjust_app_performance_daily_json_file(src_path, dst_path, df_app
             first = False
 
             json.dump(rec, dst, ensure_ascii=False)
+            records_written += 1
 
             # update progress to current file position
             pbar.update(src.tell() - pbar.n)
 
         dst.write("\n]\n")
+
+    return {
+        "output_path": dst_path,
+        "records_written": records_written,
+    }
 
 def apply_game_info_adjustments(df_game_full_info: pd.DataFrame,
                                 df_game_info_adjustment: pd.DataFrame,
@@ -2424,8 +2459,13 @@ def adjust_ndjson_app_full_info(
 
     print(f"Done. Output: {output_ndjson_path}")
     print(f"Written: {written:,} | Skipped duplicates: {skipped_dupes:,}")
+    return {
+        "output_path": output_ndjson_path,
+        "records_written": written,
+        "skipped_duplicates": skipped_dupes,
+    }
 
-    from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 import requests
 
 def chunk_list(items, chunk_size):
@@ -2443,7 +2483,7 @@ def get_apps_active_users(
     end_date: str,
     max_periods: int = 1000,
     data_model: str = "DM_2025_Q2",
-    app_chunk_size: int = 500,
+    app_chunk_size: int = 200,
     request_timeout: int = 60,
     show_progress: bool = True,
 ):
@@ -2568,16 +2608,17 @@ def get_apps_active_users(
 
     block_pbar.close()
 
-    # Merge into unified records keyed by (app_id, country, date)
+    # Merge SensorTower's DAU/WAU/MAU series only on their source dates.
+    # Period-level semantics stay explicit for downstream aggregation.
     merged = {}
 
-    def ensure_row(app_id, country, date):
-        k = (str(app_id), str(country), str(date))
+    def ensure_row(app_id, country, row_date):
+        k = (str(app_id), str(country), str(row_date))
         if k not in merged:
             merged[k] = {
                 "app_id": str(app_id),
                 "country": country,
-                "date": date,
+                "date": str(row_date),
                 "dau_android": None,
                 "dau_iphone": None,
                 "dau_ipad": None,
@@ -2602,14 +2643,418 @@ def get_apps_active_users(
             row[f"{prefix}_android"] = r.get("users")
 
     apply_ios(ios_day, "dau")
-    apply_ios(ios_week, "wau")
-    apply_ios(ios_month, "mau")
-
     apply_android(android_day, "dau")
+    apply_ios(ios_week, "wau")
     apply_android(android_week, "wau")
+    apply_ios(ios_month, "mau")
     apply_android(android_month, "mau")
 
     return list(merged.values())
+
+
+def _split_active_users_date_range(start_date: str, end_date: str, time_period: str, max_periods: int):
+    current_start = datetime.strptime(start_date, "%Y-%m-%d")
+    final_end = datetime.strptime(end_date, "%Y-%m-%d")
+    ranges = []
+
+    if time_period == "day":
+        step_days = max_periods
+        while current_start <= final_end:
+            current_end = min(current_start + timedelta(days=step_days - 1), final_end)
+            ranges.append((current_start.strftime("%Y-%m-%d"), current_end.strftime("%Y-%m-%d")))
+            current_start = current_end + timedelta(days=1)
+
+    elif time_period == "week":
+        while current_start <= final_end:
+            current_end = current_start + timedelta(days=max_periods * 7 - 1)
+            current_end = min(current_end, final_end)
+            current_end = current_end + timedelta(days=(6 - current_end.weekday()))
+            current_end = min(current_end, final_end)
+
+            ranges.append((current_start.strftime("%Y-%m-%d"), current_end.strftime("%Y-%m-%d")))
+            current_start = current_end + timedelta(days=1)
+
+    elif time_period == "month":
+        while current_start <= final_end:
+            current_end = current_start + timedelta(days=max_periods * 30 - 1)
+            current_end = min(current_end, final_end)
+            month_end = (current_end.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            current_end = min(month_end, final_end)
+
+            ranges.append((current_start.strftime("%Y-%m-%d"), current_end.strftime("%Y-%m-%d")))
+            current_start = (current_end.replace(day=1) + timedelta(days=32)).replace(day=1)
+
+    else:
+        raise ValueError("time_period must be one of: day, week, month")
+
+    return ranges
+
+
+def _count_non_empty_lines(path: Path) -> int:
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
+
+
+def _iter_ndjson_rows(path: Path):
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                yield json.loads(line)
+
+
+def _fetch_active_users_block_to_cache(
+    *,
+    api_key: str,
+    base_url: str,
+    os_name: str,
+    app_ids: list,
+    time_period: str,
+    country_codes: str,
+    start_date: str,
+    end_date: str,
+    max_periods: int,
+    data_model: str,
+    app_chunk_size: int,
+    request_timeout: int,
+    show_progress: bool,
+    cache_path: Path,
+) -> dict[str, Any]:
+    if cache_path.exists():
+        row_count = _count_non_empty_lines(cache_path)
+        print(f"Reusing cached active users block: {cache_path.name} ({row_count:,} rows)")
+        return {
+            "cache_path": str(cache_path),
+            "row_count": row_count,
+            "reused_cache": True,
+        }
+
+    if not app_ids:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text("", encoding="utf-8")
+        return {
+            "cache_path": str(cache_path),
+            "row_count": 0,
+            "reused_cache": False,
+        }
+
+    endpoint = f"/v1/{os_name}/usage/active_users"
+    url = f"{base_url}{endpoint}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    date_ranges = _split_active_users_date_range(start_date, end_date, time_period, max_periods)
+    n_chunks = (len(app_ids) + app_chunk_size - 1) // app_chunk_size
+    total_requests = len(date_ranges) * n_chunks
+    desc = f"{os_name.upper()} {time_period.upper()} requests"
+    pbar = tqdm(total=total_requests, desc=desc, disable=not show_progress)
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".partial")
+    row_count = 0
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            for dr_start, dr_end in date_ranges:
+                for app_chunk in chunk_list(app_ids, app_chunk_size):
+                    params = {
+                        "app_ids": ",".join(map(str, app_chunk)),
+                        "time_period": time_period,
+                        "start_date": dr_start,
+                        "end_date": dr_end,
+                        "countries": country_codes,
+                        "data_model": data_model,
+                    }
+
+                    max_attempts = int(os.environ.get("ST_ACTIVE_USERS_REQUEST_RETRIES", "5"))
+                    retry_sleep_seconds = float(os.environ.get("ST_ACTIVE_USERS_RETRY_SLEEP_SECONDS", "5"))
+                    resp = None
+                    for attempt in range(1, max_attempts + 1):
+                        try:
+                            resp = requests.get(url, headers=headers, params=params, timeout=request_timeout)
+                            if resp.status_code == 200:
+                                break
+                            retryable_status = resp.status_code == 429 or resp.status_code >= 500
+                            if not retryable_status or attempt == max_attempts:
+                                raise RuntimeError(
+                                    f"SensorTower active_users failed: os={os_name}, time_period={time_period}, "
+                                    f"range={dr_start}..{dr_end}, status={resp.status_code}, body={resp.text[:500]}"
+                                )
+                            print(
+                                "SensorTower active_users retrying: "
+                                f"os={os_name}, time_period={time_period}, range={dr_start}..{dr_end}, "
+                                f"status={resp.status_code}, attempt={attempt}/{max_attempts}"
+                            )
+                        except requests.RequestException as exc:
+                            if attempt == max_attempts:
+                                raise
+                            print(
+                                "SensorTower active_users retrying after request error: "
+                                f"os={os_name}, time_period={time_period}, range={dr_start}..{dr_end}, "
+                                f"attempt={attempt}/{max_attempts}, error={exc}"
+                            )
+                        sleep_for = retry_sleep_seconds * attempt + random.uniform(0, 1)
+                        time.sleep(sleep_for)
+
+                    if resp is None or resp.status_code != 200:
+                        raise RuntimeError(
+                            f"SensorTower active_users failed without a valid response: "
+                            f"os={os_name}, time_period={time_period}, range={dr_start}..{dr_end}"
+                        )
+
+                    payload = resp.json()
+                    if isinstance(payload, dict):
+                        payload = payload.get("data", [])
+                    if not isinstance(payload, list):
+                        raise RuntimeError(f"Unexpected response format: {type(payload)}")
+
+                    for row in payload:
+                        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                        row_count += 1
+                    pbar.update(1)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+    finally:
+        pbar.close()
+
+    os.replace(tmp_path, cache_path)
+    return {
+        "cache_path": str(cache_path),
+        "row_count": row_count,
+        "reused_cache": False,
+    }
+
+
+def _export_active_users_from_cache_files(
+    *,
+    cache_dir: Path,
+    export_path: Path,
+) -> dict[str, Any]:
+    scratch_root = Path(tempfile.gettempdir()) / "vn_strategy_active_users_merge"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    scratch_dir = scratch_root / export_path.stem
+    if scratch_dir.exists():
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    db_path = scratch_dir / "active_users_merge.sqlite3"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        # This SQLite database is disposable scratch space built from durable
+        # cache files, so favor throughput over crash recovery.
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("PRAGMA locking_mode=EXCLUSIVE")
+        conn.execute("PRAGMA temp_store=FILE")
+        conn.execute("PRAGMA cache_size=-200000")
+        conn.execute(
+            """
+            CREATE TABLE active_users (
+                app_id TEXT NOT NULL,
+                country TEXT NOT NULL,
+                date TEXT NOT NULL,
+                dau_android INTEGER,
+                dau_iphone INTEGER,
+                dau_ipad INTEGER,
+                wau_android INTEGER,
+                wau_iphone INTEGER,
+                wau_ipad INTEGER,
+                mau_android INTEGER,
+                mau_iphone INTEGER,
+                mau_ipad INTEGER,
+                PRIMARY KEY (app_id, country, date)
+            )
+            """
+        )
+
+        block_specs = [
+            ("ios_day.ndjson", ("dau_iphone", "dau_ipad"), lambda row: (row.get("iphone_users"), row.get("ipad_users"))),
+            ("android_day.ndjson", ("dau_android",), lambda row: (row.get("users"),)),
+            ("ios_week.ndjson", ("wau_iphone", "wau_ipad"), lambda row: (row.get("iphone_users"), row.get("ipad_users"))),
+            ("android_week.ndjson", ("wau_android",), lambda row: (row.get("users"),)),
+            ("ios_month.ndjson", ("mau_iphone", "mau_ipad"), lambda row: (row.get("iphone_users"), row.get("ipad_users"))),
+            ("android_month.ndjson", ("mau_android",), lambda row: (row.get("users"),)),
+        ]
+
+        for filename, columns, value_builder in block_specs:
+            cache_path = cache_dir / filename
+            if not cache_path.exists():
+                continue
+            print(f"Merging active users cache block: {filename}")
+            update_clause = ", ".join(f"{column}=excluded.{column}" for column in columns)
+            insert_columns = ["app_id", "country", "date", *columns]
+            placeholders = ", ".join("?" for _ in insert_columns)
+            sql = (
+                f"INSERT INTO active_users ({', '.join(insert_columns)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT(app_id, country, date) DO UPDATE SET {update_clause}"
+            )
+
+            batch = []
+            rows_seen = 0
+            conn.execute("BEGIN")
+            for row in _iter_ndjson_rows(cache_path):
+                batch.append(
+                    (
+                        str(row.get("app_id")),
+                        str(row.get("country")),
+                        str(row.get("date"))[:10],
+                        *value_builder(row),
+                    )
+                )
+                rows_seen += 1
+                if len(batch) >= 10000:
+                    conn.executemany(sql, batch)
+                    batch.clear()
+                if rows_seen % 500000 == 0:
+                    print(f"  {filename}: merged {rows_seen:,} source rows")
+            if batch:
+                conn.executemany(sql, batch)
+            conn.commit()
+            print(f"  {filename}: merged {rows_seen:,} source rows")
+
+        row_count = int(conn.execute("SELECT COUNT(*) FROM active_users").fetchone()[0])
+        tmp_output_path = export_path.with_suffix(export_path.suffix + ".partial")
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        if tmp_output_path.exists():
+            tmp_output_path.unlink()
+
+        with tmp_output_path.open("w", encoding="utf-8") as handle:
+            handle.write("[")
+            first = True
+            cursor = conn.execute(
+                """
+                SELECT
+                    app_id,
+                    country,
+                    date,
+                    dau_android,
+                    dau_iphone,
+                    dau_ipad,
+                    wau_android,
+                    wau_iphone,
+                    wau_ipad,
+                    mau_android,
+                    mau_iphone,
+                    mau_ipad
+                FROM active_users
+                """
+            )
+            rows_written = 0
+            for record in cursor:
+                row = {
+                    "app_id": record[0],
+                    "country": record[1],
+                    "date": record[2],
+                    "dau_android": record[3],
+                    "dau_iphone": record[4],
+                    "dau_ipad": record[5],
+                    "wau_android": record[6],
+                    "wau_iphone": record[7],
+                    "wau_ipad": record[8],
+                    "mau_android": record[9],
+                    "mau_iphone": record[10],
+                    "mau_ipad": record[11],
+                }
+                if not first:
+                    handle.write(",")
+                first = False
+                json.dump(row, handle, ensure_ascii=False)
+                rows_written += 1
+                if rows_written % 500000 == 0:
+                    print(f"  final JSON: wrote {rows_written:,}/{row_count:,} rows")
+            handle.write("]")
+        print(f"  final JSON: wrote {row_count:,}/{row_count:,} rows")
+
+        os.replace(tmp_output_path, export_path)
+        return {
+            "output_path": str(export_path),
+            "row_count": row_count,
+        }
+    finally:
+        conn.close()
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+
+
+def create_table_app_active_users_checkpointed(
+    api_key,
+    base_url,
+    str_start_date,
+    str_end_date,
+    df_app_full_info,
+    json_export_path,
+    country_codes="VN",
+    max_periods=1000,
+    data_model="DM_2025_Q2",
+    export_path=None,
+    app_chunk_size: int = 200,
+    request_timeout: int = 60,
+):
+    if export_path is None:
+        timestamp = int(time.time())
+        country_label = country_codes.replace(",", "-").replace(" ", "")
+        export_path = f"{json_export_path}/st_app_active_users_{country_label}_{str_start_date}_{str_end_date}_{timestamp}.json"
+
+    export_path_obj = Path(export_path)
+    cache_dir = export_path_obj.parent / f".{export_path_obj.stem}_active_users_tmp"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    list_app_ids_ios = list(
+        map(lambda x: str(x), list(df_app_full_info[df_app_full_info["os"] == "ios"]["app_id"]))
+    )
+    list_app_ids_android = list(
+        map(lambda x: str(x), list(df_app_full_info[df_app_full_info["os"] == "android"]["app_id"]))
+    )
+
+    print("Query app active users (DAU/WAU/MAU)...")
+    print(f"Countries: {country_codes} | Start: {str_start_date} | End: {str_end_date}")
+    print(f"iOS apps: {len(list_app_ids_ios):,} | Android apps: {len(list_app_ids_android):,}")
+
+    block_pbar = tqdm(total=6, desc="Fetching blocks")
+    block_specs = [
+        ("ios", list_app_ids_ios, "day", cache_dir / "ios_day.ndjson"),
+        ("ios", list_app_ids_ios, "week", cache_dir / "ios_week.ndjson"),
+        ("ios", list_app_ids_ios, "month", cache_dir / "ios_month.ndjson"),
+        ("android", list_app_ids_android, "day", cache_dir / "android_day.ndjson"),
+        ("android", list_app_ids_android, "week", cache_dir / "android_week.ndjson"),
+        ("android", list_app_ids_android, "month", cache_dir / "android_month.ndjson"),
+    ]
+
+    try:
+        for os_name, app_ids, time_period, cache_path in block_specs:
+            _fetch_active_users_block_to_cache(
+                api_key=api_key,
+                base_url=base_url,
+                os_name=os_name,
+                app_ids=app_ids,
+                time_period=time_period,
+                country_codes=country_codes,
+                start_date=str_start_date,
+                end_date=str_end_date,
+                max_periods=max_periods,
+                data_model=data_model,
+                app_chunk_size=app_chunk_size,
+                request_timeout=request_timeout,
+                show_progress=True,
+                cache_path=cache_path,
+            )
+            block_pbar.update(1)
+    finally:
+        block_pbar.close()
+
+    print("Merging cached active users blocks into final JSON...")
+    result = _export_active_users_from_cache_files(
+        cache_dir=cache_dir,
+        export_path=export_path_obj,
+    )
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    print(f"✅ Exported: {export_path_obj}")
+    return result
 
 def create_table_app_active_users(
     api_key,
@@ -2621,6 +3066,7 @@ def create_table_app_active_users(
     country_codes="VN",
     max_periods=1000,
     data_model="DM_2025_Q2",
+    export_path=None,
 ):
     """
     Fetch DAU/WAU/MAU active users for iOS + Android apps in df_app_full_info,
@@ -2671,11 +3117,12 @@ def create_table_app_active_users(
 
     # Export to JSON
     print("Exporting active users data to json...")
-    timestamp = int(time.time())
-
-    # safe-ish country label for filenames
-    country_label = country_codes.replace(",", "-").replace(" ", "")
-    out_path = f"{json_export_path}/st_app_active_users_{country_label}_{str_start_date}_{str_end_date}_{timestamp}.json"
+    if export_path is None:
+        timestamp = int(time.time())
+        country_label = country_codes.replace(",", "-").replace(" ", "")
+        out_path = f"{json_export_path}/st_app_active_users_{country_label}_{str_start_date}_{str_end_date}_{timestamp}.json"
+    else:
+        out_path = export_path
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(active_users_data, f, ensure_ascii=False)
@@ -2727,7 +3174,7 @@ def get_apps_retention_daily(
     end_date: str,
     *,
     max_months_per_request: int = 6,
-    app_chunk_size: int = 500,
+    app_chunk_size: int = 200,
     request_timeout: int = 60,
     show_progress: bool = True,
 ):
@@ -2764,49 +3211,111 @@ def get_apps_retention_daily(
     for region in regions:
         for dr_start, dr_end in date_ranges:
             for app_chunk in chunk_list(app_ids, app_chunk_size):
-
-                # This endpoint (per your curl screenshot) uses auth_token in query
-                params = {
-                    "retention": "",  # flag-style param from docs: ?retention
-                    "bundle": "retention_daily",
-                    "breakdown": "date,app_id",
-                    "start_date": dr_start,
-                    "end_date": dr_end,
-                    "regions": region,
-                    "app_ids": ",".join(map(str, app_chunk)),
-                    "auth_token": api_key,
-                }
-
-                resp = requests.get(url, params=params, timeout=request_timeout)
-
-                if resp.status_code != 200:
+                try:
+                    for row in _iter_retention_daily_rows_for_chunk(
+                        url=url,
+                        api_key=api_key,
+                        region=region,
+                        dr_start=dr_start,
+                        dr_end=dr_end,
+                        app_chunk=app_chunk,
+                        request_timeout=request_timeout,
+                        pbar=pbar,
+                    ):
+                        results.append(row)
+                except Exception:
                     pbar.close()
-                    raise RuntimeError(
-                        f"Retention API failed: region={region}, range={dr_start}..{dr_end}, "
-                        f"status={resp.status_code}, body={resp.text[:800]}"
-                    )
-
-                payload = resp.json()
-                data = payload.get("data", []) if isinstance(payload, dict) else payload
-                if not isinstance(data, list):
-                    pbar.close()
-                    raise RuntimeError(f"Unexpected response format: {type(data)}")
-
-                # Normalize output schema
-                for row in data:
-                    out = {
-                        "app_id": str(row.get("app_id")) if row.get("app_id") is not None else None,
-                        "country": region,
-                        "date": row.get("date"),
-                    }
-                    for k in RETENTION_FIELDS_DAILY:
-                        out[k] = row.get(k)  # default None if missing
-                    results.append(out)
-
-                pbar.update(1)
+                    raise
 
     pbar.close()
     return results
+
+def _iter_retention_daily_rows_for_chunk(
+    *,
+    url: str,
+    api_key: str,
+    region: str,
+    dr_start: str,
+    dr_end: str,
+    app_chunk: list,
+    request_timeout: int,
+    pbar,
+):
+    params = {
+        "retention": "",  # flag-style param (?retention)
+        "bundle": "retention_daily",
+        "breakdown": "date,app_id",
+        "start_date": dr_start,
+        "end_date": dr_end,
+        "regions": region,
+        "app_ids": ",".join(map(str, app_chunk)),
+        "auth_token": api_key,
+    }
+
+    resp = _get_with_retry(
+        url,
+        params=params,
+        timeout=request_timeout,
+        max_retries=6,
+        base_sleep=1.5,
+        max_sleep=60,
+    )
+
+    if resp.status_code == 414 and len(app_chunk) > 1:
+        midpoint = max(1, len(app_chunk) // 2)
+        left_chunk = app_chunk[:midpoint]
+        right_chunk = app_chunk[midpoint:]
+        print(
+            f"Retention request URI too large for {len(app_chunk):,} apps; "
+            f"retrying as chunks of {len(left_chunk):,} and {len(right_chunk):,}."
+        )
+        if getattr(pbar, "total", None) is not None:
+            pbar.total += 1
+            pbar.refresh()
+        yield from _iter_retention_daily_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            region=region,
+            dr_start=dr_start,
+            dr_end=dr_end,
+            app_chunk=left_chunk,
+            request_timeout=request_timeout,
+            pbar=pbar,
+        )
+        yield from _iter_retention_daily_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            region=region,
+            dr_start=dr_start,
+            dr_end=dr_end,
+            app_chunk=right_chunk,
+            request_timeout=request_timeout,
+            pbar=pbar,
+        )
+        return
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Retention API failed: region={region}, range={dr_start}..{dr_end}, "
+            f"status={resp.status_code}, body={resp.text[:800]}"
+        )
+
+    payload = resp.json()
+    data = payload.get("data", []) if isinstance(payload, dict) else payload
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected response format: {type(data)}")
+
+    for row in data:
+        out = {
+            "app_id": str(row.get("app_id")) if row.get("app_id") is not None else None,
+            "country": region,
+            "date": row.get("date"),
+        }
+        for k in RETENTION_FIELDS_DAILY:
+            out[k] = row.get(k)
+        yield out
+
+    pbar.update(1)
 
 def iter_apps_retention_daily(
     api_key: str,
@@ -2844,51 +3353,20 @@ def iter_apps_retention_daily(
     for region in regions:
         for dr_start, dr_end in date_ranges:
             for app_chunk in chunk_list(app_ids, app_chunk_size):
-
-                params = {
-                    "retention": "",  # flag-style param (?retention)
-                    "bundle": "retention_daily",
-                    "breakdown": "date,app_id",
-                    "start_date": dr_start,
-                    "end_date": dr_end,
-                    "regions": region,
-                    "app_ids": ",".join(map(str, app_chunk)),
-                    "auth_token": api_key,
-                }
-
-                resp = _get_with_retry(
-                    url,
-                    params=params,
-                    timeout=request_timeout,
-                    max_retries=6,
-                    base_sleep=1.5,
-                    max_sleep=60,
-                )
-
-                if resp.status_code != 200:
-                    pbar.close()
-                    raise RuntimeError(
-                        f"Retention API failed: region={region}, range={dr_start}..{dr_end}, "
-                        f"status={resp.status_code}, body={resp.text[:800]}"
+                try:
+                    yield from _iter_retention_daily_rows_for_chunk(
+                        url=url,
+                        api_key=api_key,
+                        region=region,
+                        dr_start=dr_start,
+                        dr_end=dr_end,
+                        app_chunk=app_chunk,
+                        request_timeout=request_timeout,
+                        pbar=pbar,
                     )
-
-                payload = resp.json()
-                data = payload.get("data", []) if isinstance(payload, dict) else payload
-                if not isinstance(data, list):
+                except Exception:
                     pbar.close()
-                    raise RuntimeError(f"Unexpected response format: {type(data)}")
-
-                for row in data:
-                    out = {
-                        "app_id": str(row.get("app_id")) if row.get("app_id") is not None else None,
-                        "country": region,
-                        "date": row.get("date"),
-                    }
-                    for k in RETENTION_FIELDS_DAILY:
-                        out[k] = row.get(k)
-                    yield out
-
-                pbar.update(1)
+                    raise
 
     pbar.close()
 
@@ -2901,8 +3379,9 @@ def create_table_app_retention_daily_ndjson(
     ndjson_export_path,
     region_codes="VN",
     max_months_per_request=6,
-    app_chunk_size=500,
+    app_chunk_size=200,
     show_progress=True,
+    export_path=None,
 ):
     """
     Streaming NDJSON export for daily retention.
@@ -2934,12 +3413,15 @@ def create_table_app_retention_daily_ndjson(
     print(f"Total apps: {len(app_ids):,} (iOS={len(list_app_ids_ios):,}, Android={len(list_app_ids_android):,})")
 
     # Output path
-    timestamp = int(time.time())
-    region_label = region_codes.replace(",", "-").replace(" ", "")
-    out_path = (
-        f"{ndjson_export_path}/st_app_retention_daily_{region_label}_"
-        f"{str_start_date}_{str_end_date}_{timestamp}.ndjson"
-    )
+    if export_path is None:
+        timestamp = int(time.time())
+        region_label = region_codes.replace(",", "-").replace(" ", "")
+        out_path = (
+            f"{ndjson_export_path}/st_app_retention_daily_{region_label}_"
+            f"{str_start_date}_{str_end_date}_{timestamp}.ndjson"
+        )
+    else:
+        out_path = export_path
 
     record_count = 0
     with open(out_path, "w", encoding="utf-8") as f:
@@ -3268,6 +3750,7 @@ def create_table_app_user_reviews_ndjson_streaming(
     request_timeout: Any = (10, 60),
     show_progress: bool = True,
     verbose: bool = False,
+    export_path: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     BIG-DATA wrapper: streams reviews and writes NDJSON line-by-line.
@@ -3292,12 +3775,15 @@ def create_table_app_user_reviews_ndjson_streaming(
     print(f"Apps: iOS={len(ios_app_ids):,} | Android={len(android_app_ids):,}")
     print("Tip: This can be very large (millions of reviews). NDJSON is the right choice.")
 
-    timestamp = int(time.time())
-    country_label = country_codes.replace(",", "-").replace(" ", "")
-    out_path = (
-        f"{ndjson_export_path}/st_app_user_reviews_{country_label}_"
-        f"{str_start_date}_{str_end_date}_{timestamp}.ndjson"
-    )
+    if export_path is None:
+        timestamp = int(time.time())
+        country_label = country_codes.replace(",", "-").replace(" ", "")
+        out_path = (
+            f"{ndjson_export_path}/st_app_user_reviews_{country_label}_"
+            f"{str_start_date}_{str_end_date}_{timestamp}.ndjson"
+        )
+    else:
+        out_path = export_path
 
     record_count = 0
 
@@ -3354,7 +3840,7 @@ def get_apps_demographics_all_time(
     start_date: str = "2015-10-01",
     end_date: Optional[str] = None,  # defaults to yesterday
     date_granularity: str = "all_time",  # keep default as required by your case
-    app_chunk_size: int = 500,
+    app_chunk_size: int = 200,
     timeout: float = 60.0,
     show_progress: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -3386,56 +3872,121 @@ def get_apps_demographics_all_time(
     out_rows: List[Dict[str, Any]] = []
 
     iterator = chunks
+    pbar = None
     if show_progress:
-        iterator = tqdm(chunks, desc=f"Fetching {os_name} demographics", unit="chunk")
+        pbar = tqdm(chunks, desc=f"Fetching {os_name} demographics", unit="chunk")
+        iterator = pbar
 
     for chunk in iterator:
-        params = {
-            "auth_token": api_key,
-            "app_ids": ",".join(chunk),
-            "country": country_code,
-            "date_granularity": date_granularity,
-            "start_date": start_date,
-            "end_date": end_date,
-        }
-
-        resp = _get_with_retry(url, params=params, timeout=timeout)
-        if resp.status_code != 200:
-            # fail fast with useful info (don’t silently swallow)
-            raise RuntimeError(
-                f"Demographics request failed: {resp.status_code} {resp.text[:1000]}"
-            )
-
-        payload = resp.json() or {}
-        app_data = payload.get("app_data") or []
-
-        # app_data is a list of objects
-        for item in app_data:
-            nd = item.get("normalized_demographics") or {}
-
-            row = {
-                "app_id": item.get("app_id"),
-                "country": item.get("country", country_code),
-                "date": fetched_at,  # date you fetched this snapshot
-                "date_granularity": item.get("date_granularity", date_granularity),
-                "confidence": item.get("confidence"),
-                "average_age_total": item.get("average_age_total"),
-                "female": item.get("female"),
-                "male": item.get("male"),
-                "normalized_demographics_female_18": nd.get("female_18"),
-                "normalized_demographics_female_25": nd.get("female_25"),
-                "normalized_demographics_female_35": nd.get("female_35"),
-                "normalized_demographics_female_45": nd.get("female_45"),
-                "normalized_demographics_female_55": nd.get("female_55"),
-                "normalized_demographics_male_18": nd.get("male_18"),
-                "normalized_demographics_male_25": nd.get("male_25"),
-                "normalized_demographics_male_35": nd.get("male_35"),
-                "normalized_demographics_male_45": nd.get("male_45"),
-                "normalized_demographics_male_55": nd.get("male_55"),
-            }
+        for row in _iter_demographics_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            country_code=country_code,
+            date_granularity=date_granularity,
+            start_date=start_date,
+            end_date=end_date,
+            app_chunk=chunk,
+            timeout=timeout,
+            fetched_at=fetched_at,
+            pbar=pbar,
+        ):
             out_rows.append(row)
 
     return out_rows
+
+def _iter_demographics_rows_for_chunk(
+    *,
+    url: str,
+    api_key: str,
+    country_code: str,
+    date_granularity: str,
+    start_date: str,
+    end_date: str,
+    app_chunk: Sequence[str],
+    timeout: Any,
+    fetched_at: str,
+    pbar,
+) -> Iterable[Dict[str, Any]]:
+    params = {
+        "auth_token": api_key,
+        "app_ids": ",".join(app_chunk),
+        "country": country_code,
+        "date_granularity": date_granularity,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+    resp = _get_with_retry(url, params=params, timeout=timeout)
+    if resp.status_code == 414 and len(app_chunk) > 1:
+        midpoint = max(1, len(app_chunk) // 2)
+        left_chunk = app_chunk[:midpoint]
+        right_chunk = app_chunk[midpoint:]
+        print(
+            f"Demographics request URI too large for {len(app_chunk):,} apps; "
+            f"retrying as chunks of {len(left_chunk):,} and {len(right_chunk):,}."
+        )
+        if pbar is not None and getattr(pbar, "total", None) is not None:
+            pbar.total += 1
+            pbar.refresh()
+        yield from _iter_demographics_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            country_code=country_code,
+            date_granularity=date_granularity,
+            start_date=start_date,
+            end_date=end_date,
+            app_chunk=left_chunk,
+            timeout=timeout,
+            fetched_at=fetched_at,
+            pbar=pbar,
+        )
+        yield from _iter_demographics_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            country_code=country_code,
+            date_granularity=date_granularity,
+            start_date=start_date,
+            end_date=end_date,
+            app_chunk=right_chunk,
+            timeout=timeout,
+            fetched_at=fetched_at,
+            pbar=pbar,
+        )
+        return
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Demographics request failed: {resp.status_code} {resp.text[:1000]}"
+        )
+
+    payload = resp.json() or {}
+    app_data = payload.get("app_data") or []
+
+    for item in app_data:
+        nd = item.get("normalized_demographics") or {}
+        yield {
+            "app_id": item.get("app_id"),
+            "country": item.get("country", country_code),
+            "date": fetched_at,
+            "date_granularity": item.get("date_granularity", date_granularity),
+            "confidence": item.get("confidence"),
+            "average_age_total": item.get("average_age_total"),
+            "female": item.get("female"),
+            "male": item.get("male"),
+            "normalized_demographics_female_18": nd.get("female_18"),
+            "normalized_demographics_female_25": nd.get("female_25"),
+            "normalized_demographics_female_35": nd.get("female_35"),
+            "normalized_demographics_female_45": nd.get("female_45"),
+            "normalized_demographics_female_55": nd.get("female_55"),
+            "normalized_demographics_male_18": nd.get("male_18"),
+            "normalized_demographics_male_25": nd.get("male_25"),
+            "normalized_demographics_male_35": nd.get("male_35"),
+            "normalized_demographics_male_45": nd.get("male_45"),
+            "normalized_demographics_male_55": nd.get("male_55"),
+        }
+
+    if pbar is not None:
+        pbar.update(1)
 
 def iter_apps_demographics_all_time(
     *,
@@ -3447,7 +3998,7 @@ def iter_apps_demographics_all_time(
     start_date: str = "2020-01-01",   # required by API even for all_time
     end_date: Optional[str] = None,
     date_granularity: str = "all_time",
-    app_chunk_size: int = 500,
+    app_chunk_size: int = 200,
     timeout: Any = 60,
     show_progress: bool = True,
 ) -> Iterable[Dict[str, Any]]:
@@ -3475,49 +4026,24 @@ def iter_apps_demographics_all_time(
     fetched_at = date.today().isoformat()
 
     iterator = chunks
+    pbar = None
     if show_progress:
-        iterator = tqdm(chunks, desc=f"Fetching {os_name} demographics", unit="chunk")
+        pbar = tqdm(chunks, desc=f"Fetching {os_name} demographics", unit="chunk")
+        iterator = pbar
 
     for chunk in iterator:
-        params = {
-            "auth_token": api_key,
-            "app_ids": ",".join(chunk),
-            "country": country_code,
-            "date_granularity": date_granularity,
-            "start_date": start_date,
-            "end_date": end_date,
-        }
-
-        resp = _get_with_retry(url, params=params, timeout=timeout)
-        if resp.status_code != 200:
-            raise RuntimeError(f"Demographics request failed: {resp.status_code} {resp.text[:1000]}")
-
-        payload = resp.json() or {}
-        app_data = payload.get("app_data") or []
-
-        for item in app_data:
-            nd = item.get("normalized_demographics") or {}
-
-            yield {
-                "app_id": item.get("app_id"),
-                "country": item.get("country", country_code),
-                "date": fetched_at,  # snapshot fetch date
-                "date_granularity": item.get("date_granularity", date_granularity),
-                "confidence": item.get("confidence"),
-                "average_age_total": item.get("average_age_total"),
-                "female": item.get("female"),
-                "male": item.get("male"),
-                "normalized_demographics_female_18": nd.get("female_18"),
-                "normalized_demographics_female_25": nd.get("female_25"),
-                "normalized_demographics_female_35": nd.get("female_35"),
-                "normalized_demographics_female_45": nd.get("female_45"),
-                "normalized_demographics_female_55": nd.get("female_55"),
-                "normalized_demographics_male_18": nd.get("male_18"),
-                "normalized_demographics_male_25": nd.get("male_25"),
-                "normalized_demographics_male_35": nd.get("male_35"),
-                "normalized_demographics_male_45": nd.get("male_45"),
-                "normalized_demographics_male_55": nd.get("male_55"),
-            }
+        yield from _iter_demographics_rows_for_chunk(
+            url=url,
+            api_key=api_key,
+            country_code=country_code,
+            date_granularity=date_granularity,
+            start_date=start_date,
+            end_date=end_date,
+            app_chunk=chunk,
+            timeout=timeout,
+            fetched_at=fetched_at,
+            pbar=pbar,
+        )
 
 
 def create_table_app_demographics_all_time_ndjson_streaming(
@@ -3530,9 +4056,10 @@ def create_table_app_demographics_all_time_ndjson_streaming(
     start_date: str = "2020-01-01",      # required even for all_time
     end_date: Optional[str] = None,
     date_granularity: str = "all_time",
-    app_chunk_size: int = 500,
+    app_chunk_size: int = 200,
     timeout: Any = 60,
     show_progress: bool = True,
+    export_path: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Wrapper like retention/active-users:
@@ -3556,11 +4083,14 @@ def create_table_app_demographics_all_time_ndjson_streaming(
     print(f"Country: {country_code} | date_granularity={date_granularity}")
     print(f"Apps: iOS={len(ios_app_ids):,} | Android={len(android_app_ids):,}")
 
-    ts = int(time.time())
-    out_path = (
-        f"{ndjson_export_path}/st_app_demographics_{country_code}_"
-        f"{date_granularity}_{ts}.ndjson"
-    )
+    if export_path is None:
+        ts = int(time.time())
+        out_path = (
+            f"{ndjson_export_path}/st_app_demographics_{country_code}_"
+            f"{date_granularity}_{ts}.ndjson"
+        )
+    else:
+        out_path = export_path
 
     n = 0
     with open(out_path, "w", encoding="utf-8") as f:

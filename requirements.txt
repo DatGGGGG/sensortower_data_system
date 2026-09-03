@@ -1,0 +1,9 @@
+pandas
+numpy
+requests
+matplotlib
+plotly
+ijson
+tqdm
+python-dotenv
+sqlalchemy
