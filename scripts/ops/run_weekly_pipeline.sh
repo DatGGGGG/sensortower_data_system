@@ -6,15 +6,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/common.sh"
 
-ops_init "weekly"
-ops_load_env
-
 # Weekly production runs at early Monday. Use the previous Sunday by default so
 # we avoid partial same-day SensorTower data.
+if [[ -f "${ROOT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
 if [[ -z "${PERFORMANCE_END_DATE:-}" ]]; then
   iso_weekday="$(date +%u)"
   PERFORMANCE_END_DATE="$(date -d "-${iso_weekday} days" +%F)"
 fi
+RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date -u -d "${PERFORMANCE_END_DATE}T00:00:00Z" +%s)}"
+RUN_ID="${RUN_ID:-scheduled_weekly_${PERFORMANCE_END_DATE//-/}}"
+
+ops_init "weekly"
+ops_load_env
+
 SNAPSHOT_START_YEAR="${SNAPSHOT_START_YEAR:-${PERFORMANCE_END_DATE:0:4}}"
 SNAPSHOT_END_YEAR="${SNAPSHOT_END_YEAR:-${PERFORMANCE_END_DATE:0:4}}"
 SNAPSHOT_REGIONS="${SNAPSHOT_REGIONS:-VN,CN,WW}"
@@ -41,6 +50,12 @@ if [[ "${RUN_USER_REVIEWS:-0}" == "1" ]]; then
 fi
 
 for stage_name in $SOURCE_BASE_STAGES; do
+  stage_result="${OUTPUT_ROOT}/logs/${RUN_ID}/run_source_base_pipeline_${stage_name}.json"
+  if [[ "${RESET_WEEKLY_STATE:-0}" != "1" ]] && ops_source_stage_is_complete "$stage_result"; then
+    echo "Weekly resume: skipping completed stage ${stage_name}."
+    continue
+  fi
+
   ops_run "$(ops_python)" "${ROOT_DIR}/scripts/run_source_base_pipeline.py" \
     --config-path "$CONFIG_PATH" \
     --input-root "$INPUT_ROOT" \

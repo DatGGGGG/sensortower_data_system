@@ -44,39 +44,9 @@ if [[ "${RUN_USER_REVIEWS:-0}" == "1" ]]; then
   SOURCE_BASE_STAGES="${SOURCE_BASE_STAGES} build_user_reviews"
 fi
 
-quarterly_stage_is_complete() {
-  local result_path="$1"
-  "$(ops_python)" - "$result_path" <<'PY'
-import json
-import os
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-except (OSError, ValueError):
-    raise SystemExit(1)
-
-if payload.get("status") != "success":
-    raise SystemExit(1)
-
-results = payload.get("stage_results") or []
-if len(results) != 1 or results[0].get("status") != "success":
-    raise SystemExit(1)
-
-outputs = results[0].get("output_files") or {}
-if not outputs:
-    raise SystemExit(1)
-for output_path in outputs.values():
-    if not output_path or not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
-        raise SystemExit(1)
-PY
-}
-
 for stage_name in $SOURCE_BASE_STAGES; do
   stage_result="${OUTPUT_ROOT}/logs/${RUN_ID}/run_source_base_pipeline_${stage_name}.json"
-  if [[ "${RESET_QUARTERLY_STATE:-0}" != "1" ]] && quarterly_stage_is_complete "$stage_result"; then
+  if [[ "${RESET_QUARTERLY_STATE:-0}" != "1" ]] && ops_source_stage_is_complete "$stage_result"; then
     echo "Quarterly resume: skipping completed stage ${stage_name}."
     continue
   fi

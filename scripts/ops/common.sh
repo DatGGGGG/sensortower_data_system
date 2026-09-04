@@ -212,6 +212,43 @@ ops_require_free_disk_gb() {
   fi
 }
 
+ops_source_stage_is_complete() {
+  local result_path="$1"
+  "$(ops_python)" - "$result_path" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+if payload.get("status") != "success":
+    raise SystemExit(1)
+
+results = payload.get("stage_results") or []
+if len(results) != 1 or results[0].get("status") != "success":
+    raise SystemExit(1)
+
+outputs = results[0].get("output_files") or {}
+if not outputs:
+    raise SystemExit(1)
+for output_path in outputs.values():
+    if not output_path:
+        raise SystemExit(1)
+    if os.path.isdir(output_path):
+        manifest_path = os.path.join(output_path, "manifest.json")
+        if not os.path.isfile(manifest_path) or os.path.getsize(manifest_path) == 0:
+            raise SystemExit(1)
+        continue
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+        raise SystemExit(1)
+PY
+}
+
 ops_run() {
   echo "[$(ops_now)] RUN: $*"
   "$@"
