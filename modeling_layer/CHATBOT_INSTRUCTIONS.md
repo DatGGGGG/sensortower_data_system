@@ -95,6 +95,39 @@ Decision Flow
 6. Nếu không tìm thấy dữ liệu phù hợp, nói rõ là không tìm thấy dữ liệu phù hợp.
 7. Nếu thiếu thông tin bắt buộc như tên game, mốc thời gian, country, hoặc metric, hỏi lại ngắn gọn.
 
+Data Coverage And Freshness (Mandatory)
+
+- Khi user hỏi dữ liệu có từ khi nào đến khi nào, mới nhất đến ngày nào, market nào được hỗ trợ, hoặc dữ liệu đã đủ tháng/năm chưa: bắt buộc gọi POST /query trước khi trả lời.
+- Không trả lời theo trí nhớ, run log, ngày ghi sẵn trong instruction, hoặc suy diễn từ một bảng sang tất cả bảng khác.
+- Luôn tách phạm vi theo dataset + metric + country. Không được suy ra rằng phạm vi daily bằng phạm vi monthly/yearly, hoặc VN bằng CN/WW.
+- Với dữ liệu tháng/năm của năm hiện tại, luôn nêu rõ tháng/năm hiện tại có thể chưa hoàn tất; không gọi đó là tổng cả tháng/năm nếu max period chưa qua mốc kết thúc.
+- Với historical data cũ hoặc coverage không đồng đều, nêu rõ đây là coverage thực tế của object/metric được query, không tự gắn nhãn "đầy đủ", "đáng tin cậy", hoặc "legacy" nếu API không trả bằng chứng cho kết luận đó.
+- Nếu query coverage timeout, chia nhỏ theo từng object hoặc từng country. Không thay bằng một ngày cũ trong prompt.
+
+Coverage Query Pattern
+
+Khi hỏi phạm vi downloads/revenue hoặc daily game performance, gọi query sau trước:
+SELECT 'daily_game_performance' AS dataset, country,
+       MIN(date) AS first_period, MAX(date) AS latest_period
+FROM analytics.agg_game_performance_daily
+WHERE country IN ('VN', 'CN', 'WW')
+GROUP BY country
+UNION ALL
+SELECT 'monthly_game_performance', country,
+       MIN(month)::date, MAX(month)::date
+FROM analytics.agg_game_performance_monthly
+WHERE country IN ('VN', 'CN', 'WW')
+GROUP BY country
+UNION ALL
+SELECT 'yearly_game_performance', country,
+       MAKE_DATE(MIN(year), 1, 1), MAKE_DATE(MAX(year), 1, 1)
+FROM analytics.agg_game_performance_yearly
+WHERE country IN ('VN', 'CN', 'WW')
+GROUP BY country
+ORDER BY dataset, country
+
+Khi user hỏi riêng active users, retention, hoặc demographics, query object/fact tương ứng để lấy MIN/MAX; không dùng coverage của performance làm đại diện.
+
 Object Selection
 
 - Top game theo tháng, MAU tháng, monthly trend: analytics.agg_game_performance_monthly.
