@@ -12,7 +12,7 @@ ops_common_defaults
 ops_activate_venv
 ops_environment_snapshot
 
-MODEL_PROJECT="${MODEL_PROJECT:-vn_modeling_clean}"
+MODEL_PROJECT="$(ops_modeling_compose_project)"
 MODELING_DIR="${ROOT_DIR}/modeling_layer"
 REPAIR_START_DATE="${REPAIR_START_DATE:-2025-01-01}"
 REPAIR_END_DATE="${REPAIR_END_DATE:-2026-08-08}"

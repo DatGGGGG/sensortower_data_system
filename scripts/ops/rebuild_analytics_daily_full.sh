@@ -13,7 +13,7 @@ ops_activate_venv
 ops_acquire_pipeline_lock
 ops_environment_snapshot
 
-MODEL_PROJECT="${MODEL_PROJECT:-vn_modeling_clean}"
+MODEL_PROJECT="$(ops_modeling_compose_project)"
 MODELING_DIR="${ROOT_DIR}/modeling_layer"
 RESET_REBUILD="${RESET_REBUILD:-0}"
 

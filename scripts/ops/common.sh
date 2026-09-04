@@ -313,6 +313,27 @@ ops_common_defaults() {
   export MAPPING_PUBLISHER_BOTTOM_UP_PATH MAPPING_APP_SPECIAL_CASES_PATH
 }
 
+ops_modeling_compose_project() {
+  # Reuse the project that owns the running fixed-name Postgres container.
+  # This keeps the same scripts portable between the local and VM deployments.
+  local detected_project
+
+  if [[ -n "${MODEL_PROJECT:-}" ]]; then
+    printf '%s\n' "$MODEL_PROJECT"
+    return 0
+  fi
+
+  detected_project="$(docker inspect \
+    --format '{{ index .Config.Labels "com.docker.compose.project" }}' \
+    vn-strategy-modeling-postgres 2>/dev/null || true)"
+  if [[ -n "$detected_project" && "$detected_project" != "<no value>" ]]; then
+    printf '%s\n' "$detected_project"
+    return 0
+  fi
+
+  printf '%s\n' "${MODELING_COMPOSE_PROJECT_DEFAULT:-vn_modeling_clean}"
+}
+
 ops_require_manual_inputs() {
   ops_require_file "$GAME_INFO_ADJUSTMENT_PATH" "game info adjustment mapping"
   ops_require_file "$MAPPING_PUBLISHER_TO_APPS_TOP_DOWN_PATH" "publisher-to-apps top-down mapping"

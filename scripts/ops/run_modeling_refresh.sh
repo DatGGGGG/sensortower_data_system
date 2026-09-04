@@ -12,7 +12,6 @@ ops_common_defaults
 ops_activate_venv
 ops_environment_snapshot
 
-MODEL_PROJECT="${MODEL_PROJECT:-vn_modeling_clean}"
 MODELING_DIR="${ROOT_DIR}/modeling_layer"
 set +x 2>/dev/null || true
 if [[ -f "${MODELING_DIR}/.env" ]]; then
@@ -21,6 +20,8 @@ if [[ -f "${MODELING_DIR}/.env" ]]; then
   source "${MODELING_DIR}/.env"
   set +a
 fi
+MODEL_PROJECT="$(ops_modeling_compose_project)"
+echo "Using modeling Docker Compose project: ${MODEL_PROJECT}"
 if [[ "${OPS_INHERIT_CONTEXT:-0}" != "1" || -n "${BASH_XTRACEFD:-}" ]]; then
   set -x
 fi

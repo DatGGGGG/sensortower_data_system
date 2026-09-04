@@ -3,10 +3,11 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/common.sh"
 MODELING_DIR="${ROOT_DIR}/modeling_layer"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-30}"
-MODEL_PROJECT="${MODEL_PROJECT:-vn_modeling_clean}"
+MODEL_PROJECT="$(ops_modeling_compose_project)"
 RUN_ID="${RUN_ID:-}"
 
 latest_run_id() {
