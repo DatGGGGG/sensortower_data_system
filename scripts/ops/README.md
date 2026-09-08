@@ -158,17 +158,19 @@ validates every country/month against core facts, and only then publishes
 month-sized transactions. It does not fetch SensorTower data or alter core
 facts.
 
-Choose a shared completed cutoff across all requested countries. Do not use a
-partial current day. A short recent-window dry build is the recommended first
-smoke test:
+Choose the final day of the latest fully completed month covered by both source
+facts across all requested countries. Do not repair a partial current month:
+the operator publishes monthly and yearly aggregates, while the normal weekly
+pipeline owns the current reconciliation window. A short recent-window dry
+build is the recommended first smoke test:
 
 ```bash
-RUN_ID=manual_analytics_history_smoke_20260906 \
+RUN_ID=manual_analytics_history_smoke_20260831 \
 REPAIR_COUNTRY_CODES=VN,CN,WW \
 REPAIR_START_DATE_VN=2026-08-01 \
 REPAIR_START_DATE_CN=2026-08-01 \
 REPAIR_START_DATE_WW=2026-08-01 \
-REPAIR_END_DATE=2026-09-06 \
+REPAIR_END_DATE=2026-08-31 \
 REPAIR_PHASE=build \
 RESET_REPAIR=1 \
 RESTART_API=0 \

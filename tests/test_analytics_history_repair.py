@@ -11,7 +11,9 @@ class AnalyticsHistoryRepairContractTests(unittest.TestCase):
         self.assertIn('ops_acquire_pipeline_lock', script)
         self.assertIn('REPAIR_END_DATE is required', script)
         self.assertIn('REPAIR_PHASE must be build, validate, publish, all, or cleanup', script)
-        self.assertIn('Repair cutoff is not stable', script)
+        self.assertIn('require_completed_month_end', script)
+        self.assertIn('Repair cutoff is not covered', script)
+        self.assertIn('partial current month is unsafe', script)
 
     def test_history_repair_has_country_specific_defaults(self) -> None:
         script = (ROOT / "scripts/ops/run_analytics_history_repair.sh").read_text(encoding="utf-8")

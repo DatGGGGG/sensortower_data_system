@@ -74,6 +74,16 @@ require_iso_date() {
   fi
 }
 
+require_completed_month_end() {
+  local value="$1" month_end
+  month_end="$(date -d "$(date -d "$value" +%Y-%m-01) +1 month -1 day" +%F)"
+  if [[ "$value" != "$month_end" ]]; then
+    echo "REPAIR_END_DATE (${value}) must be the final day of a completed month (${month_end})."
+    echo "Historical repair publishes monthly and yearly aggregates, so a partial current month is unsafe."
+    exit 64
+  fi
+}
+
 default_start_for_country() {
   case "$1" in
     VN) printf '2014-01-01\n' ;;
@@ -104,10 +114,11 @@ total_years=0
 
 if [[ "$REPAIR_PHASE" != "cleanup" ]]; then
   [[ -n "$REPAIR_END_DATE" ]] || {
-    echo "REPAIR_END_DATE is required. Use the shared completed source cutoff, for example 2026-09-06."
+    echo "REPAIR_END_DATE is required. Use a fully completed month covered by every requested source, for example 2026-08-31."
     exit 64
   }
   require_iso_date "$REPAIR_END_DATE" "REPAIR_END_DATE"
+  require_completed_month_end "$REPAIR_END_DATE"
 
   for country in "${COUNTRIES[@]}"; do
     start_var="REPAIR_START_DATE_${country}"
@@ -286,7 +297,7 @@ WITH requested(country) AS (VALUES ${requested_values}), scoped AS (
   FROM core.fact_app_performance_daily WHERE country_android IN (${country_list}) GROUP BY 1
   UNION ALL
   SELECT country_ios, MAX(date)::date FROM core.fact_app_performance_daily WHERE country_ios IN (${country_list}) GROUP BY 1
-), per_country AS (SELECT country, MAX(max_date) AS max_date FROM scoped GROUP BY 1)
+), per_country AS (SELECT country, MIN(max_date) AS max_date FROM scoped GROUP BY 1)
 SELECT CASE
   WHEN COUNT(per_country.country) = (SELECT COUNT(*) FROM requested)
    AND COUNT(per_country.max_date) = (SELECT COUNT(*) FROM requested)
@@ -321,9 +332,9 @@ validate_source_cutoff() {
     echo "Could not determine a shared source cutoff for ${REPAIR_COUNTRY_CODES}."
     exit 65
   }
-  if [[ "$SOURCE_PERFORMANCE_CUTOFF" != "$REPAIR_END_DATE" || "$SOURCE_ACTIVE_USERS_CUTOFF" != "$REPAIR_END_DATE" ]]; then
-    echo "Repair cutoff is not stable: requested=${REPAIR_END_DATE}, performance=${SOURCE_PERFORMANCE_CUTOFF}, active_users=${SOURCE_ACTIVE_USERS_CUTOFF}."
-    echo "Choose the shared latest completed source date and start a fresh repair run. This avoids overwriting a current month/year with partial data."
+  if [[ "$SOURCE_PERFORMANCE_CUTOFF" < "$REPAIR_END_DATE" || "$SOURCE_ACTIVE_USERS_CUTOFF" < "$REPAIR_END_DATE" ]]; then
+    echo "Repair cutoff is not covered: requested=${REPAIR_END_DATE}, performance=${SOURCE_PERFORMANCE_CUTOFF}, active_users=${SOURCE_ACTIVE_USERS_CUTOFF}."
+    echo "Choose the last completed month covered by both source facts for every requested country."
     exit 65
   fi
 }
