@@ -151,25 +151,73 @@ ANALYTICS_REFRESH_END_DATE=2026-07-31 \
 bash scripts/ops/run_modeling_refresh.sh
 ```
 
-Do not full-refresh `analytics.agg_game_performance_daily` during cron. If that
-table needs a complete historical rebuild, use the blue-green operator command:
+Do not full-refresh `analytics.agg_game_performance_daily` during cron. If
+historical analytics coverage is incomplete, rebuild it from trusted `core.*`
+facts with the resumable history-repair operator. It creates shadows first,
+validates every country/month against core facts, and only then publishes
+month-sized transactions. It does not fetch SensorTower data or alter core
+facts.
+
+Choose a shared completed cutoff across all requested countries. Do not use a
+partial current day. A short recent-window dry build is the recommended first
+smoke test:
 
 ```bash
-bash scripts/ops/rebuild_analytics_daily_full.sh
+RUN_ID=manual_analytics_history_smoke_20260906 \
+REPAIR_COUNTRY_CODES=VN,CN,WW \
+REPAIR_START_DATE_VN=2026-08-01 \
+REPAIR_START_DATE_CN=2026-08-01 \
+REPAIR_START_DATE_WW=2026-08-01 \
+REPAIR_END_DATE=2026-09-06 \
+REPAIR_PHASE=build \
+RESET_REPAIR=1 \
+RESTART_API=0 \
+bash scripts/ops/run_analytics_history_repair.sh
 ```
+
+After the smoke build passes, use a new run ID for the full history. VN starts
+in 2014 by default; CN and WW start in 2025. The operator requires 40 GiB free
+space by default and holds the source/modeling lock for the whole repair, so a
+weekly or quarterly pipeline cannot change the core cutoff while it runs.
+
+```bash
+RUN_ID=manual_analytics_history_full_20260906 \
+REPAIR_COUNTRY_CODES=VN,CN,WW \
+REPAIR_END_DATE=2026-09-06 \
+RESET_REPAIR=1 \
+REPAIR_PHASE=all \
+RESTART_API=1 \
+bash scripts/ops/run_analytics_history_repair.sh
+```
+
+If the operator or host stops, rerun the exact same command with
+`RESET_REPAIR=0`; successful slices are skipped. The run registry rejects a
+resume if the countries, date ranges, or source cutoff differ. Watch it from a
+second terminal:
+
+```bash
+RUN_ID=manual_analytics_history_full_20260906 \
+bash scripts/ops/watch_analytics_history_repair.sh
+```
+
+After production validation, remove the shadows deliberately:
+
+```bash
+RUN_ID=manual_analytics_history_full_20260906 \
+REPAIR_PHASE=cleanup \
+CONFIRM_HISTORY_REPAIR_CLEANUP=1 \
+bash scripts/ops/run_analytics_history_repair.sh
+```
+
+`run_analytics_cnww_repair.sh` remains as a compatibility wrapper for a
+CN/WW-only repair, but now requires an explicit `REPAIR_END_DATE` for the same
+cutoff safety guarantee.
 
 Production window refreshes rebuild `analytics.agg_game_performance_daily` one
 calendar day at a time. The lower-level SQL also supports
 `-v refresh_daily_aggregate=false` so callers can refresh caches and serving
 tables first, then run `/sql/insert_agg_game_performance_daily_window.sql` for
 each affected date independently.
-
-If a full rebuild dies mid-run, rerun the same command to resume. To throw away
-the shadow rebuild and start over:
-
-```bash
-RESET_REBUILD=1 bash scripts/ops/rebuild_analytics_daily_full.sh
-```
 
 Weekly and daily source-to-base skip user reviews by default. To opt in:
 

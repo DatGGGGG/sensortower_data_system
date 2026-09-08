@@ -45,8 +45,10 @@ DELETE FROM analytics.mobile_app_yearly_performance_cache
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
 
-INSERT INTO analytics.mobile_app_yearly_performance_cache
-SELECT *
+INSERT INTO analytics.mobile_app_yearly_performance_cache (
+    year, country, app_id, total_downloads, total_revenue
+)
+SELECT year, country, app_id, total_downloads, total_revenue
 FROM analytics.repair_mobile_app_yearly_performance_cache
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
@@ -55,8 +57,10 @@ DELETE FROM analytics.mobile_app_yearly_active_users_cache
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
 
-INSERT INTO analytics.mobile_app_yearly_active_users_cache
-SELECT *
+INSERT INTO analytics.mobile_app_yearly_active_users_cache (
+    year, country, app_id, avg_dau, avg_wau, avg_mau
+)
+SELECT year, country, app_id, avg_dau, avg_wau, avg_mau
 FROM analytics.repair_mobile_app_yearly_active_users_cache
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
@@ -65,8 +69,19 @@ DELETE FROM analytics.agg_game_performance_yearly
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
 
-INSERT INTO analytics.agg_game_performance_yearly
-SELECT *
+INSERT INTO analytics.agg_game_performance_yearly (
+    year, country, game_name, unified_app_id,
+    game_class, game_genre, game_subgenre, game_art_style, game_camera_pov,
+    game_setting, game_theme, game_product_model, game_ip_corporate_parent,
+    game_ip_operator, game_ip_media_type, game_licensed_ip,
+    downloads, revenue, avg_dau, avg_wau, avg_mau
+)
+SELECT
+    year, country, game_name, unified_app_id,
+    game_class, game_genre, game_subgenre, game_art_style, game_camera_pov,
+    game_setting, game_theme, game_product_model, game_ip_corporate_parent,
+    game_ip_operator, game_ip_media_type, game_licensed_ip,
+    downloads, revenue, avg_dau, avg_wau, avg_mau
 FROM analytics.repair_agg_game_performance_yearly
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';
@@ -75,8 +90,12 @@ DELETE FROM analytics.agg_subgenre_performance_yearly
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND (country = :'country_code' OR country IS NULL);
 
-INSERT INTO analytics.agg_subgenre_performance_yearly
-SELECT *
+INSERT INTO analytics.agg_subgenre_performance_yearly (
+    year, country, game_class, game_genre, subgenre,
+    downloads, revenue, avg_dau, avg_wau, avg_mau
+)
+SELECT year, country, game_class, game_genre, subgenre,
+       downloads, revenue, avg_dau, avg_wau, avg_mau
 FROM analytics.repair_agg_subgenre_performance_yearly
 WHERE year = EXTRACT(YEAR FROM :'period_start'::date)::int
   AND country = :'country_code';

@@ -24,6 +24,23 @@ CREATE TABLE IF NOT EXISTS analytics.analytics_repair_progress (
     PRIMARY KEY (run_id, stage, country, period_start, period_end)
 );
 
+-- A repair run is immutable once it starts. This prevents a resumed run from
+-- silently mixing a different country scope or source cutoff into one shadow.
+CREATE TABLE IF NOT EXISTS analytics.analytics_repair_runs (
+    run_id text PRIMARY KEY,
+    scope_fingerprint text NOT NULL,
+    country_codes text NOT NULL,
+    country_start_dates jsonb NOT NULL,
+    repair_end_date date NOT NULL,
+    source_performance_cutoff date NOT NULL,
+    source_active_users_cutoff date NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_started_at timestamptz NOT NULL DEFAULT now(),
+    validated_at timestamptz,
+    published_at timestamptz,
+    completed_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS analytics.repair_mobile_app_monthly_performance_cache
 (LIKE analytics.mobile_app_monthly_performance_cache INCLUDING DEFAULTS);
 
