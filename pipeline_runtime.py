@@ -3124,6 +3124,92 @@ def _fetch_local_app_records(
     return list(lsdp.get_local_app_info_iter(api_key, base_url, os_name, app_ids))
 
 
+def _extend_game_metadata_for_app_parents(
+    *,
+    api_key: str,
+    base_url: str,
+    app_rows: Iterable[dict[str, Any]],
+    run_game_path: Path,
+    current_game_path: Path,
+    run_unified_cache_path: Path,
+    current_unified_cache_path: Path,
+) -> dict[str, Any]:
+    current_columns, current_order, current_lookup = _load_game_full_info_current_lookup(current_game_path)
+    referenced_parent_ids = list(
+        dict.fromkeys(
+            parent_id
+            for row in app_rows
+            if (parent_id := _normalize_id(row.get("unified_app_id")))
+        )
+    )
+    missing_parent_ids = [parent_id for parent_id in referenced_parent_ids if parent_id not in current_lookup]
+    resolved_records: dict[str, dict[str, Any]] = {}
+    run_unified_lookup = _load_ndjson_lookup(run_unified_cache_path, _unified_cache_key)
+    current_unified_lookup = _load_ndjson_lookup(current_unified_cache_path, _unified_cache_key)
+    if missing_parent_ids:
+        unresolved_cache_ids = [
+            parent_id
+            for parent_id in missing_parent_ids
+            if parent_id not in run_unified_lookup and parent_id not in current_unified_lookup
+        ]
+        fetched_records, invalid_ids = _fetch_unified_apps_resilient(api_key, base_url, unresolved_cache_ids)
+        _upsert_lookup(run_unified_lookup, fetched_records, _unified_cache_key)
+        _upsert_lookup(current_unified_lookup, fetched_records, _unified_cache_key)
+
+        combined_unified_lookup = dict(current_unified_lookup)
+        combined_unified_lookup.update(run_unified_lookup)
+        parent_records = [
+            combined_unified_lookup[parent_id]
+            for parent_id in missing_parent_ids
+            if parent_id in combined_unified_lookup
+        ]
+        parent_df = _build_game_full_info_from_unified_records(api_key, base_url, parent_records)
+        for record in parent_df.to_dict(orient="records"):
+            parent_id = _normalize_id(record.get("unified_app_id"))
+            if parent_id:
+                record["unified_app_id"] = parent_id
+                resolved_records[parent_id] = record
+
+        unresolved_ids = sorted(set(missing_parent_ids) - set(resolved_records))
+        if unresolved_ids:
+            invalid_text = ", ".join(sorted(set(invalid_ids))) or "none"
+            raise RuntimeError(
+                "Unable to resolve parent game metadata for app dimension: "
+                f"{', '.join(unresolved_ids)} (invalid API IDs: {invalid_text})"
+            )
+
+    merged_columns = list(dict.fromkeys(current_columns + GAME_FULL_INFO_COLUMNS))
+    for parent_id, record in resolved_records.items():
+        if parent_id not in current_lookup:
+            current_order.append(parent_id)
+        current_lookup[parent_id] = record
+    current_rows = [current_lookup[parent_id] for parent_id in current_order if parent_id in current_lookup]
+    _write_csv_dataframe_atomic(_records_to_dataframe(current_rows, merged_columns), current_game_path)
+
+    run_columns, run_order, run_lookup = _load_game_full_info_current_lookup(run_game_path)
+    run_columns = list(dict.fromkeys(run_columns + GAME_FULL_INFO_COLUMNS))
+    run_parent_records = {
+        parent_id: current_lookup[parent_id]
+        for parent_id in referenced_parent_ids
+        if parent_id in current_lookup and parent_id not in run_lookup
+    }
+    for parent_id, record in run_parent_records.items():
+        if parent_id not in run_lookup:
+            run_order.append(parent_id)
+        run_lookup[parent_id] = record
+    run_rows = [run_lookup[parent_id] for parent_id in run_order if parent_id in run_lookup]
+    _write_csv_dataframe_atomic(_records_to_dataframe(run_rows, run_columns), run_game_path)
+
+    _write_lookup_ndjson(run_unified_cache_path, run_unified_lookup)
+    _write_lookup_ndjson(current_unified_cache_path, current_unified_lookup)
+    return {
+        "referenced_parent_game_count": len(referenced_parent_ids),
+        "missing_parent_game_count": len(missing_parent_ids),
+        "resolved_parent_game_count": len(resolved_records),
+        "run_parent_game_appended_count": len(run_parent_records),
+    }
+
+
 def _normalize_category_values(value: Any) -> list[str]:
     if value is None:
         return []
@@ -3207,9 +3293,11 @@ def _build_game_full_info_from_unified_records(
     else:
         df_tags_table["canonical_app_id"] = df_tags_table["canonical_app_id"].astype(str)
 
+    # Canonical metadata defines the game universe. Tags are optional enrichment;
+    # a missing tag response must never remove a game needed by an app FK.
     df_game_full_info = pd.merge(
-        df_tags_table,
         canonical_df,
+        df_tags_table,
         how="left",
         on="canonical_app_id",
     )
@@ -3260,6 +3348,69 @@ def _extract_app_records_from_game_full_info(df_game_full_info: pd.DataFrame) ->
                 )
 
     return app_records
+
+
+def _expected_app_parent_lookup(
+    app_records: Iterable[dict[str, Any]],
+) -> tuple[dict[tuple[str, str], Optional[str]], int]:
+    parents_by_key: dict[tuple[str, str], set[str]] = {}
+    for record in app_records:
+        key = (str(record.get("os") or "").strip().lower(), str(record.get("app_id") or "").strip())
+        if not key[0] or not key[1]:
+            continue
+        parent_id = _normalize_id(record.get("unified_app_id"))
+        if parent_id:
+            parents_by_key.setdefault(key, set()).add(parent_id)
+
+    conflicts = sum(1 for parents in parents_by_key.values() if len(parents) > 1)
+    lookup = {
+        key: sorted(parents)[0] if parents else None
+        for key, parents in parents_by_key.items()
+    }
+    return lookup, conflicts
+
+
+def _reconcile_local_app_parent(
+    local_record: dict[str, Any],
+    expected_parent_id: Optional[str],
+) -> tuple[dict[str, Any], bool, bool]:
+    """Return app metadata with a usable parent and source/expected IDs retained for audit."""
+    row = dict(local_record)
+    source_parent_id = _normalize_id(row.get("unified_app_id"))
+    expected_parent_id = _normalize_id(expected_parent_id)
+    mismatch = bool(source_parent_id and expected_parent_id and source_parent_id != expected_parent_id)
+    filled_from_game = bool(not source_parent_id and expected_parent_id)
+
+    if mismatch or filled_from_game:
+        row["sensor_tower_unified_app_id"] = source_parent_id
+        row["expected_unified_app_id"] = expected_parent_id
+        row["unified_app_id_parent_mismatch"] = mismatch
+    if filled_from_game:
+        row["unified_app_id"] = expected_parent_id
+
+    return row, mismatch, filled_from_game
+
+
+def _reconcile_app_metadata_rows(
+    rows: Iterable[dict[str, Any]],
+    expected_parent_by_key: dict[tuple[str, str], Optional[str]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    reconciled: list[dict[str, Any]] = []
+    mismatch_count = 0
+    filled_parent_count = 0
+    for row in rows:
+        key = _local_cache_key(row)
+        adjusted, mismatch, filled = _reconcile_local_app_parent(
+            row,
+            expected_parent_by_key.get(key) if key is not None else None,
+        )
+        reconciled.append(adjusted)
+        mismatch_count += int(mismatch)
+        filled_parent_count += int(filled)
+    return reconciled, {
+        "parent_mismatch_count": mismatch_count,
+        "parent_filled_from_game_count": filled_parent_count,
+    }
 
 
 def _load_game_ids_from_json(path: Path) -> list[str]:
@@ -3738,6 +3889,12 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                         api_key = _read_api_key(ctx.repo_root)
                     df_game_full_info = pd.read_csv(outputs["game_full_info"], low_memory=False)
                     app_records = _extract_app_records_from_game_full_info(df_game_full_info)
+                    expected_parent_by_key, expected_parent_conflict_count = _expected_app_parent_lookup(app_records)
+                    if expected_parent_conflict_count:
+                        raise RuntimeError(
+                            "Conflicting parent games found for the same app in game metadata: "
+                            f"{expected_parent_conflict_count} app key(s)"
+                        )
                     run_ios_lookup = _load_ndjson_lookup(outputs["snapshot_ios_local_raw"], _local_cache_key)
                     run_android_lookup = _load_ndjson_lookup(outputs["snapshot_android_local_raw"], _local_cache_key)
                     current_local_lookup = _load_ndjson_lookup(
@@ -3809,6 +3966,10 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                     )
                     missing_row_count = 0
                     unresolved_requested_keys: set[tuple[str, str]] = set()
+                    parent_reconcile_metrics = {
+                        "parent_mismatch_count": 0,
+                        "parent_filled_from_game_count": 0,
+                    }
                     if refresh_all_rows:
                         ordered_rows: list[dict[str, Any]] = []
                         seen_keys: set[tuple[str, str]] = set()
@@ -3823,6 +3984,20 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                                 unresolved_requested_keys.add(lookup_key)
                                 continue
                             ordered_rows.append(local_record)
+
+                        ordered_rows, parent_reconcile_metrics = _reconcile_app_metadata_rows(
+                            ordered_rows,
+                            expected_parent_by_key,
+                        )
+                        parent_closure_metrics = _extend_game_metadata_for_app_parents(
+                            api_key=api_key,
+                            base_url=ctx.base_url,
+                            app_rows=ordered_rows,
+                            run_game_path=outputs["game_full_info"],
+                            current_game_path=state_outputs["game_full_info_current"],
+                            run_unified_cache_path=outputs["snapshot_unified_raw"],
+                            current_unified_cache_path=state_outputs["snapshot_unified_raw_current"],
+                        )
 
                         _write_ndjson_file(outputs["app_full_info"], ordered_rows, append=False)
                         _write_ndjson_file(state_outputs["app_full_info_current"], ordered_rows, append=False)
@@ -3849,6 +4024,24 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                             for lookup_key in merged_app_order
                             if lookup_key in current_app_lookup
                         ]
+                        merged_rows, parent_reconcile_metrics = _reconcile_app_metadata_rows(
+                            merged_rows,
+                            expected_parent_by_key,
+                        )
+                        current_app_lookup = {
+                            key: row
+                            for row in merged_rows
+                            if (key := _local_cache_key(row)) is not None
+                        }
+                        parent_closure_metrics = _extend_game_metadata_for_app_parents(
+                            api_key=api_key,
+                            base_url=ctx.base_url,
+                            app_rows=merged_rows,
+                            run_game_path=outputs["game_full_info"],
+                            current_game_path=state_outputs["game_full_info_current"],
+                            run_unified_cache_path=outputs["snapshot_unified_raw"],
+                            current_unified_cache_path=state_outputs["snapshot_unified_raw_current"],
+                        )
                         _write_ndjson_file(state_outputs["app_full_info_current"], merged_rows, append=False)
 
                         ordered_rows = []
@@ -3869,6 +4062,9 @@ def run_source_base_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[s
                         "local_cache_hit_count": local_cache_hit_count,
                         "local_cache_miss_count": len(ios_missing) + len(android_missing),
                         "missing_local_app_record_count": missing_row_count,
+                        "expected_parent_conflict_count": expected_parent_conflict_count,
+                        **parent_reconcile_metrics,
+                        **parent_closure_metrics,
                         "file_size_bytes": _file_size(outputs["app_full_info"]),
                         "current_file_size_bytes": _file_size(state_outputs["app_full_info_current"]),
                     }

@@ -168,6 +168,8 @@ fi
       -v full_refresh="$FACT_FULL_REFRESH" \
       -v app_ndjson=/source_data/staging/st_app_full_info_adjusted_current.ndjson \
       -f /sql/load_dim_app_info_ndjson.sql
+    ops_run docker exec -i vn-strategy-modeling-postgres psql -U postgres -d mydb \
+      -f /sql/validate_app_dimension_parent_closure.sql
   fi
 
   if [[ "$LOAD_MODELING_PERFORMANCE" == "1" ]]; then
@@ -192,6 +194,8 @@ fi
       ops_run docker exec -i vn-strategy-modeling-postgres psql -U postgres -d mydb \
         -c "ANALYZE core.fact_app_performance_daily; SELECT * FROM raw.fact_app_performance_daily_load_progress; SELECT COUNT(*) AS missing_app_rows FROM raw.fact_app_performance_daily_missing_app; SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM core.fact_app_performance_daily;"
     fi
+    ops_run docker exec -i vn-strategy-modeling-postgres psql -U postgres -d mydb \
+      -f /sql/validate_performance_missing_apps.sql
   fi
 
   if [[ "$LOAD_MODELING_ACTIVE_USERS" == "1" ]]; then
@@ -211,6 +215,8 @@ fi
       -c "CALL core.load_fact_app_performance_active_users_from_staging(${ACTIVE_USERS_BATCH_LINES});"
     ops_run docker exec -i vn-strategy-modeling-postgres psql -U postgres -d mydb \
       -c "ANALYZE core.fact_app_performance_active_users; SELECT * FROM raw.fact_app_performance_active_users_load_progress; SELECT COUNT(*) AS missing_app_rows FROM raw.fact_app_performance_active_users_missing_app; SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM core.fact_app_performance_active_users;"
+    ops_run docker exec -i vn-strategy-modeling-postgres psql -U postgres -d mydb \
+      -f /sql/validate_active_users_missing_apps.sql
   fi
 
   if [[ "$LOAD_MODELING_RETENTION" == "1" ]]; then
