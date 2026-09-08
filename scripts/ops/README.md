@@ -177,6 +177,10 @@ RESTART_API=0 \
 bash scripts/ops/run_analytics_history_repair.sh
 ```
 
+This smoke run is shadow-only: do not publish a narrow pilot, because yearly
+publication replaces a full country/year. After it validates successfully, use
+a new run ID with the full January-to-month-end history scope before publishing.
+
 After the smoke build passes, use a new run ID for the full history. VN starts
 in 2014 by default; CN and WW start in 2025. The operator requires 40 GiB free
 space by default and holds the source/modeling lock for the whole repair, so a

@@ -151,6 +151,18 @@ if [[ "$REPAIR_PHASE" != "cleanup" ]]; then
     COUNTRY_YEAR_COUNT["$country"]="$year_count"
     total_years=$((total_years + year_count))
   done
+
+  # Yearly publish SQL replaces a whole country/year. A narrow pilot can safely
+  # build and validate shadows, but it must never publish an August-only year.
+  if [[ "$REPAIR_PHASE" == "publish" || "$REPAIR_PHASE" == "all" ]]; then
+    for country in "${COUNTRIES[@]}"; do
+      if [[ "$(date -d "${COUNTRY_START[$country]}" +%m-%d)" != "01-01" ]]; then
+        echo "${country} repair starts at ${COUNTRY_START[$country]}; publish requires January 1 so yearly aggregates remain complete."
+        echo "Use REPAIR_PHASE=build for a narrow pilot, then run the full January-to-month-end scope to publish."
+        exit 64
+      fi
+    done
+  fi
 fi
 
 if [[ "$RESET_REPAIR" == "1" && "$REPAIR_PHASE" == "publish" ]]; then
