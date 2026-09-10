@@ -95,3 +95,20 @@ def run_read_only_query(sql: str, row_cap: int, timeout_ms: int) -> dict[str, An
         "truncated": truncated,
         "duration_ms": duration_ms,
     }
+
+
+def validate_read_only_query(sql: str, timeout_ms: int) -> dict[str, Any]:
+    """Plan a guarded query without reading any warehouse rows."""
+    wrapped_sql = f"SELECT * FROM ({sql}) AS portal_validation LIMIT 0"
+    started_at = time.perf_counter()
+    with get_connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                cur.execute(wrapped_sql)
+                columns = [
+                    {"name": desc.name, "data_type": str(desc.type_code or "unknown")}
+                    for desc in cur.description or []
+                ]
+    return {"output_columns": columns, "duration_ms": round((time.perf_counter() - started_at) * 1000, 2)}

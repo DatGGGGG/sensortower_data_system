@@ -18,7 +18,7 @@ from .charts import (
 )
 from .catalog import CATALOG, allowed_catalog_objects
 from .config import get_settings
-from .db import execute_statement, fetch_all, fetch_catalog_columns, fetch_one, ping_database, run_read_only_query
+from .db import execute_statement, fetch_all, fetch_catalog_columns, fetch_one, ping_database, run_read_only_query, validate_read_only_query
 from .query_guard import QueryValidationError, validate_read_only_sql
 from .security import require_api_key
 
@@ -165,6 +165,7 @@ def root() -> dict[str, Any]:
             "/games/{unified_app_id}",
             "/meta/catalog",
             "/query",
+            "/query/validate",
             "/charts/render",
             "/charts/artifacts/{artifact_id}",
             "/apps",
@@ -291,12 +292,40 @@ def get_catalog() -> dict[str, Any]:
                 "object_type": object_types.get(object_name, "unknown"),
                 "grain": entry.grain,
                 "description": entry.description,
-                "columns": grouped_columns.get(object_name, []),
+                "columns": catalog_columns(object_name, grouped_columns.get(object_name, [])),
                 "examples": list(entry.examples),
             }
         )
 
     return {"objects": objects}
+
+
+def catalog_columns(object_name: str, columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach maintained analytical meanings; do not guess them in downstream clients."""
+    dimensions = {"app_id", "unified_app_id", "game_name", "country", "os", "name", "game_class", "game_genre", "game_subgenre", "cleaned_publisher_name"}
+    dates = {"date", "month", "year"}
+    active_users = {"dau", "wau", "mau", "avg_dau", "avg_wau", "avg_mau"}
+    retention = {"est_retention_d1", "est_retention_d7", "est_retention_d30", "est_retention_d60", "est_retention_d90", "est_retention_d180", "est_retention_d365"}
+    output: list[dict[str, Any]] = []
+    for column in columns:
+        name = str(column["name"])
+        item = dict(column)
+        if name in dimensions:
+            item.update(semantic_type="identifier" if name in {"app_id", "unified_app_id"} else "dimension", unit="text", additivity="non_additive", default_aggregation="none", allowed_aggregations=[], null_policy="preserve")
+        elif name in dates:
+            item.update(semantic_type="date", unit="text", additivity="non_additive", default_aggregation="none", allowed_aggregations=[], null_policy="preserve")
+        elif name in active_users:
+            item.update(semantic_type="measure", unit="count", additivity="non_additive", default_aggregation="latest", allowed_aggregations=["latest", "average", "maximum"], null_policy="exclude")
+        elif name in retention:
+            item.update(semantic_type="ratio", unit="percent", additivity="non_additive", default_aggregation="average", allowed_aggregations=["average", "latest"], null_policy="exclude")
+        elif name == "revenue" or name.startswith("revenue_"):
+            item.update(semantic_type="currency", unit="usd_cents", additivity="additive", default_aggregation="sum", allowed_aggregations=["sum"], null_policy="exclude")
+        elif name == "downloads" or name.startswith("downloads_") or name.endswith("_downloads"):
+            item.update(semantic_type="measure", unit="count", additivity="additive", default_aggregation="sum", allowed_aggregations=["sum"], null_policy="exclude")
+        else:
+            item.update(semantic_type="unknown", unit="text", additivity="non_additive", default_aggregation="none", allowed_aggregations=[], null_policy="preserve")
+        output.append(item)
+    return output
 
 
 @protected.post("/query")
@@ -318,6 +347,21 @@ def query_analytics(http_request: Request, request: QueryRequest) -> dict[str, A
         "truncated": result.get("truncated"),
     }
     return result
+
+
+@protected.post("/query/validate")
+def validate_query_analytics(http_request: Request, request: QueryRequest) -> dict[str, Any]:
+    try:
+        validated = validate_read_only_sql(request.sql, set(allowed_catalog_objects()))
+        plan = validate_read_only_query(validated.sql, 2_000)
+    except QueryValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error": {"code": "PORTAL_QUERY_REJECTED", "message": str(exc), "retryable": False}}) from exc
+    except psycopg.errors.QueryCanceled as exc:
+        raise HTTPException(status_code=408, detail={"error": {"code": "QUERY_TIMEOUT", "message": "Validation timed out. Narrow the query.", "retryable": True}}) from exc
+    except psycopg.Error as exc:
+        diagnostic = getattr(exc, "diag", None)
+        raise HTTPException(status_code=400, detail={"error": {"code": "UNKNOWN_COLUMN" if getattr(diagnostic, "column_name", None) else "WAREHOUSE_QUERY_REJECTED", "message": str(exc).split("\n", 1)[0], "hint": getattr(diagnostic, "message_hint", None), "position": getattr(diagnostic, "statement_position", None), "retryable": False}}) from exc
+    return {"valid": True, "normalized_sql": validated.sql, "referenced_objects": list(validated.referenced_objects), "warnings": [], **plan, "request_id": getattr(http_request.state, "request_id", None)}
 
 
 @protected.post("/charts/render")

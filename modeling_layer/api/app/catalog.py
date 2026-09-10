@@ -54,6 +54,16 @@ CATALOG: dict[str, CatalogEntry] = {
         ),
         examples=(
             {
+                "question": "Show top downloaded games in VN in August 2026.",
+                "sql": (
+                    "SELECT game_name, unified_app_id, SUM(downloads) AS total_downloads "
+                    "FROM analytics.agg_game_performance_monthly "
+                    "WHERE country = 'VN' AND month = DATE '2026-08-01' AND downloads IS NOT NULL "
+                    "GROUP BY game_name, unified_app_id "
+                    "ORDER BY total_downloads DESC LIMIT 10"
+                ),
+            },
+            {
                 "question": "Show top games by MAU in VN for June 2026.",
                 "sql": (
                     "SELECT month, country, game_name, mau, avg_dau, avg_wau "
