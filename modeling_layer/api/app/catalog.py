@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,17 @@ CATALOG: dict[str, CatalogEntry] = {
             f"aggregated across linked apps. {ANALYTICS_GUIDANCE}"
         ),
         examples=(
+            {
+                "question": "Show top downloaded games in VN in August 2026.",
+                "sql": (
+                    "SELECT game_name, unified_app_id, SUM(downloads) AS total_downloads "
+                    "FROM analytics.agg_game_performance_monthly "
+                    "WHERE country = 'VN' AND month = DATE '2026-08-01' "
+                    "AND downloads IS NOT NULL "
+                    "GROUP BY game_name, unified_app_id "
+                    "ORDER BY total_downloads DESC LIMIT 10"
+                ),
+            },
             {
                 "question": "Show top games by MAU in VN for June 2026.",
                 "sql": (
@@ -333,3 +345,135 @@ CATALOG: dict[str, CatalogEntry] = {
 
 def allowed_catalog_objects() -> tuple[str, ...]:
     return tuple(CATALOG.keys())
+
+
+SEMANTIC_TEMPLATES: dict[str, dict[str, Any]] = {
+    "identifier": {
+        "semantic_type": "identifier",
+        "unit": "text",
+        "additivity": "non_additive",
+        "default_aggregation": "none",
+        "allowed_aggregations": [],
+        "null_policy": "preserve",
+    },
+    "dimension": {
+        "semantic_type": "dimension",
+        "unit": "text",
+        "additivity": "non_additive",
+        "default_aggregation": "none",
+        "allowed_aggregations": [],
+        "null_policy": "preserve",
+    },
+    "date": {
+        "semantic_type": "date",
+        "unit": "date",
+        "additivity": "non_additive",
+        "default_aggregation": "none",
+        "allowed_aggregations": [],
+        "null_policy": "preserve",
+    },
+    "count": {
+        "semantic_type": "measure",
+        "unit": "count",
+        "additivity": "additive",
+        "default_aggregation": "sum",
+        "allowed_aggregations": ["sum"],
+        "null_policy": "exclude",
+    },
+    "active_users": {
+        "semantic_type": "measure",
+        "unit": "count",
+        "additivity": "non_additive",
+        "default_aggregation": "latest",
+        "allowed_aggregations": ["latest", "average", "maximum"],
+        "null_policy": "exclude",
+    },
+    "retention": {
+        "semantic_type": "ratio",
+        "unit": "percent",
+        "additivity": "non_additive",
+        "default_aggregation": "average",
+        "allowed_aggregations": ["average", "latest"],
+        "null_policy": "exclude",
+    },
+    "revenue_cents": {
+        "semantic_type": "currency",
+        "unit": "usd_cents",
+        "additivity": "additive",
+        "default_aggregation": "sum",
+        "allowed_aggregations": ["sum"],
+        "null_policy": "exclude",
+    },
+    "revenue_usd": {
+        "semantic_type": "currency",
+        "unit": "usd",
+        "additivity": "additive",
+        "default_aggregation": "sum",
+        "allowed_aggregations": ["sum"],
+        "null_policy": "exclude",
+    },
+}
+
+
+# Explicit overrides are authoritative for business-sensitive units and grains.
+# Name-based inference below is only a fallback for newly added catalog columns.
+COLUMN_SEMANTICS_BY_OBJECT: dict[str, dict[str, str]] = {
+    "analytics.agg_game_performance_daily": {
+        "downloads": "count",
+        "revenue": "revenue_cents",
+        "dau": "active_users",
+        "wau": "active_users",
+        "mau": "active_users",
+    },
+    "analytics.agg_game_performance_monthly": {
+        "downloads": "count",
+        "revenue": "revenue_cents",
+        "avg_dau": "active_users",
+        "avg_wau": "active_users",
+        "mau": "active_users",
+    },
+    "analytics.agg_game_performance_yearly": {
+        "downloads": "count",
+        "revenue": "revenue_cents",
+        "avg_dau": "active_users",
+        "avg_wau": "active_users",
+        "avg_mau": "active_users",
+    },
+    "analytics.agg_new_game_new_performance": {
+        "first_7d_revenue_usd": "revenue_usd",
+        "first_30d_revenue_usd": "revenue_usd",
+        "first_90d_revenue_usd": "revenue_usd",
+        "first_365d_revenue_usd": "revenue_usd",
+    },
+}
+
+
+def enrich_catalog_columns(object_name: str, columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add stable analytical semantics while preserving existing column fields."""
+    object_overrides = COLUMN_SEMANTICS_BY_OBJECT.get(object_name, {})
+    enriched: list[dict[str, Any]] = []
+    for column in columns:
+        name = str(column["name"])
+        semantic_name = object_overrides.get(name) or _infer_semantic_template(name)
+        item = dict(column)
+        item.update(SEMANTIC_TEMPLATES[semantic_name])
+        enriched.append(item)
+    return enriched
+
+
+def _infer_semantic_template(name: str) -> str:
+    if name in {"app_id", "unified_app_id"}:
+        return "identifier"
+    if name in {"date", "month", "year", "estimated_release_date", "data_through_current_year"}:
+        return "date"
+    if name in {"dau", "wau", "mau", "avg_dau", "avg_wau", "avg_mau"} or name.endswith("_avg_dau"):
+        return "active_users"
+    if name.startswith("est_retention_"):
+        return "retention"
+    if name.endswith("_revenue_usd"):
+        return "revenue_usd"
+    if name == "revenue" or name.startswith("revenue_"):
+        return "revenue_cents"
+    if name == "downloads" or name.startswith("downloads_") or name.endswith("_downloads"):
+        return "count"
+    return "dimension"

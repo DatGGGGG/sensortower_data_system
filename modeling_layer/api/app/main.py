@@ -16,9 +16,17 @@ from .charts import (
     load_chart_artifact,
     render_chart_artifact,
 )
-from .catalog import CATALOG, allowed_catalog_objects
+from .catalog import CATALOG, allowed_catalog_objects, enrich_catalog_columns
 from .config import get_settings
-from .db import execute_statement, fetch_all, fetch_catalog_columns, fetch_one, ping_database, run_read_only_query
+from .db import (
+    execute_statement,
+    fetch_all,
+    fetch_catalog_columns,
+    fetch_one,
+    ping_database,
+    run_read_only_query,
+    validate_read_only_query,
+)
 from .query_guard import QueryValidationError, validate_read_only_sql
 from .security import require_api_key
 
@@ -165,6 +173,7 @@ def root() -> dict[str, Any]:
             "/games/{unified_app_id}",
             "/meta/catalog",
             "/query",
+            "/query/validate",
             "/charts/render",
             "/charts/artifacts/{artifact_id}",
             "/apps",
@@ -279,7 +288,7 @@ def get_catalog() -> dict[str, Any]:
             {
                 "name": row["column_name"],
                 "data_type": row["data_type"],
-                "nullable": row["is_nullable"] == "YES",
+                "nullable": row["is_nullable"] is True or row["is_nullable"] == "YES",
             }
         )
 
@@ -291,7 +300,7 @@ def get_catalog() -> dict[str, Any]:
                 "object_type": object_types.get(object_name, "unknown"),
                 "grain": entry.grain,
                 "description": entry.description,
-                "columns": grouped_columns.get(object_name, []),
+                "columns": enrich_catalog_columns(object_name, grouped_columns.get(object_name, [])),
                 "examples": list(entry.examples),
             }
         )
@@ -318,6 +327,71 @@ def query_analytics(http_request: Request, request: QueryRequest) -> dict[str, A
         "truncated": result.get("truncated"),
     }
     return result
+
+
+def _validation_database_error(exc: psycopg.Error) -> tuple[int, dict[str, Any]]:
+    diagnostic = getattr(exc, "diag", None)
+    if isinstance(exc, psycopg.errors.QueryCanceled):
+        status_code, code, message, retryable = (
+            408,
+            "QUERY_TIMEOUT",
+            "Validation timed out. Narrow the query.",
+            True,
+        )
+    elif isinstance(exc, psycopg.errors.SyntaxError):
+        status_code, code, message, retryable = 400, "SQL_SYNTAX_ERROR", str(exc).split("\n", 1)[0], False
+    elif isinstance(exc, psycopg.errors.UndefinedColumn):
+        status_code, code, message, retryable = 400, "UNKNOWN_COLUMN", str(exc).split("\n", 1)[0], False
+    elif isinstance(exc, psycopg.errors.GroupingError):
+        status_code, code, message, retryable = 400, "INVALID_GROUPING", str(exc).split("\n", 1)[0], False
+    elif isinstance(exc, (psycopg.errors.InvalidSchemaName, psycopg.errors.UndefinedTable)):
+        status_code, code, message, retryable = (
+            503,
+            "WAREHOUSE_OBJECT_UNAVAILABLE",
+            str(exc).split("\n", 1)[0],
+            True,
+        )
+    else:
+        status_code, code, message, retryable = 400, "WAREHOUSE_QUERY_REJECTED", str(exc).split("\n", 1)[0], False
+    return status_code, {
+        "error": {
+            "code": code,
+            "message": message,
+            "hint": getattr(diagnostic, "message_hint", None),
+            "position": getattr(diagnostic, "statement_position", None),
+            "retryable": retryable,
+        }
+    }
+
+
+@protected.post("/query/validate")
+def validate_query_analytics(http_request: Request, request: QueryRequest) -> dict[str, Any]:
+    try:
+        validated = validate_read_only_sql(request.sql, set(allowed_catalog_objects()))
+        plan = validate_read_only_query(validated.sql, 2_000)
+    except QueryValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "PORTAL_QUERY_REJECTED",
+                    "message": str(exc),
+                    "retryable": False,
+                }
+            },
+        ) from exc
+    except psycopg.Error as exc:
+        status_code, detail = _validation_database_error(exc)
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    return {
+        "valid": True,
+        "normalized_sql": validated.sql,
+        "referenced_objects": list(validated.referenced_objects),
+        "warnings": [],
+        **plan,
+        "request_id": getattr(http_request.state, "request_id", None),
+    }
 
 
 @protected.post("/charts/render")

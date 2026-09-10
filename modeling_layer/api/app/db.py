@@ -95,3 +95,43 @@ def run_read_only_query(sql: str, row_cap: int, timeout_ms: int) -> dict[str, An
         "truncated": truncated,
         "duration_ms": duration_ms,
     }
+
+
+def validate_read_only_query(sql: str, timeout_ms: int) -> dict[str, Any]:
+    """Validate and describe a guarded query without consuming result rows."""
+    wrapped_sql = f"SELECT * FROM ({sql}) AS query_validation LIMIT 0"
+    started_at = time.perf_counter()
+
+    with get_connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                cur.execute(wrapped_sql)
+                description = list(cur.description or [])
+                type_oids = sorted({int(column.type_code) for column in description if column.type_code})
+
+                type_names: dict[int, str] = {}
+                if type_oids:
+                    cur.execute(
+                        """
+                        SELECT oid::bigint AS oid, pg_catalog.format_type(oid, NULL) AS data_type
+                        FROM pg_catalog.pg_type
+                        WHERE oid = ANY(%(type_oids)s::oid[])
+                        """,
+                        {"type_oids": type_oids},
+                    )
+                    # These are pg_catalog metadata rows, never user-query result rows.
+                    type_names = {int(row["oid"]): str(row["data_type"]) for row in cur.fetchall()}
+
+    output_columns = [
+        {
+            "name": column.name,
+            "data_type": type_names.get(int(column.type_code), "unknown") if column.type_code else "unknown",
+        }
+        for column in description
+    ]
+    return {
+        "output_columns": output_columns,
+        "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+    }
