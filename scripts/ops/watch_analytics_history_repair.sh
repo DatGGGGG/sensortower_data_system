@@ -9,9 +9,10 @@ source "${SCRIPT_DIR}/common.sh"
 MODELING_DIR="${ROOT_DIR}/modeling_layer"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-30}"
 RUN_ID="${RUN_ID:-}"
+PYTHON_BIN="$(ops_python)"
 
 latest_run_id() {
-  python - "$ROOT_DIR" <<'PY'
+  "${PYTHON_BIN}" - "$ROOT_DIR" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -41,7 +42,7 @@ while true; do
 
   status_path="${ROOT_DIR}/data/logs/cron/${RUN_ID}/status.json"
   if [[ -f "$status_path" ]]; then
-    python - "$status_path" <<'PY'
+    "${PYTHON_BIN}" - "$status_path" <<'PY'
 import json
 import sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
