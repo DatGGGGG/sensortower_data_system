@@ -24,6 +24,20 @@ FORBIDDEN_KEYWORD_RE = re.compile(
     re.IGNORECASE,
 )
 SCHEMA_OBJECT_RE = re.compile(r"\b(?:from|join)\s+([a-zA-Z_][\w$]*\.[a-zA-Z_][\w$]*)", re.IGNORECASE)
+WHERE_CLAUSE_RE = re.compile(
+    r"\bwhere\b\s+(.*?)"
+    r"(?=\b(?:group\s+by|order\s+by|having|limit|offset|fetch|union|intersect|except)\b|[;)]|$)",
+    re.IGNORECASE,
+)
+DAILY_FILTER_COLUMN_RE = re.compile(
+    r"(?:\b[a-zA-Z_][\w$]*\s*\.\s*)?\b(?:date|country|unified_app_id)\b",
+    re.IGNORECASE,
+)
+
+
+def _inspection_sql(sql: str) -> str:
+    """Return a whitespace-insensitive copy used only for guard inspection."""
+    return " ".join(sql.split())
 
 
 def validate_read_only_sql(sql: str, allowed_objects: set[str]) -> ValidatedQuery:
@@ -64,13 +78,14 @@ def validate_read_only_sql(sql: str, allowed_objects: set[str]) -> ValidatedQuer
         joined = ", ".join(disallowed)
         raise QueryValidationError(f"Queries may only read approved catalog objects. Disallowed: {joined}")
 
-    normalized_lower = f" {normalized.lower()} "
     if "analytics.agg_game_performance_daily" in referenced_objects:
-        if " where " not in normalized_lower:
+        inspection_sql = _inspection_sql(normalized)
+        where_predicates = WHERE_CLAUSE_RE.findall(inspection_sql)
+        if not where_predicates:
             raise QueryValidationError(
                 "Queries against analytics.agg_game_performance_daily must include a WHERE filter."
             )
-        if not any(token in normalized_lower for token in (" date", " country", " unified_app_id")):
+        if not any(DAILY_FILTER_COLUMN_RE.search(predicate) for predicate in where_predicates):
             raise QueryValidationError(
                 "Queries against analytics.agg_game_performance_daily must filter by date, country, or unified_app_id."
             )

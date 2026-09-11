@@ -14,6 +14,7 @@ from modeling_layer.api.app.query_guard import QueryValidationError, validate_re
 
 
 ALLOWED = {"analytics.agg_game_performance_monthly"}
+DAILY_ALLOWED = {"analytics.agg_game_performance_daily"}
 VALID_AGGREGATE = (
     "SELECT country, SUM(downloads) AS downloads "
     "FROM analytics.agg_game_performance_monthly GROUP BY country"
@@ -80,6 +81,52 @@ class QueryGuardTests(unittest.TestCase):
     def test_rejects_forbidden_object(self) -> None:
         with self.assertRaises(QueryValidationError):
             validate_read_only_sql("SELECT * FROM private.secret_table", ALLOWED)
+
+    def test_accepts_daily_where_on_new_line(self) -> None:
+        result = validate_read_only_sql(
+            "SELECT *\nFROM analytics.agg_game_performance_daily\nWHERE country = 'VN'",
+            DAILY_ALLOWED,
+        )
+        self.assertEqual(result.referenced_objects, ("analytics.agg_game_performance_daily",))
+
+    def test_accepts_daily_where_with_tabs(self) -> None:
+        validate_read_only_sql(
+            "SELECT *\tFROM analytics.agg_game_performance_daily\tWHERE\tdate >= DATE '2026-01-01'",
+            DAILY_ALLOWED,
+        )
+
+    def test_accepts_daily_where_case_insensitively(self) -> None:
+        for keyword, column in (("where", "country"), ("WHERE", "COUNTRY"), ("WhErE", "Country")):
+            with self.subTest(keyword=keyword, column=column):
+                validate_read_only_sql(
+                    f"SELECT * FROM analytics.agg_game_performance_daily {keyword} {column} = 'VN'",
+                    DAILY_ALLOWED,
+                )
+
+    def test_accepts_qualified_daily_filter_column(self) -> None:
+        validate_read_only_sql(
+            "SELECT d.game_name FROM analytics.agg_game_performance_daily AS d\n"
+            "WHERE\n\td.unified_app_id = 'game-1'",
+            DAILY_ALLOWED,
+        )
+
+    def test_accepts_daily_filter_inside_cte(self) -> None:
+        validate_read_only_sql(
+            "WITH filtered AS (\n"
+            "  SELECT d.country, d.downloads\n"
+            "  FROM analytics.agg_game_performance_daily d\n"
+            "  WHERE d.date >= DATE '2026-01-01'\n"
+            ")\n"
+            "SELECT country, SUM(downloads) FROM filtered GROUP BY country",
+            DAILY_ALLOWED,
+        )
+
+    def test_rejects_daily_where_without_required_filter_column(self) -> None:
+        with self.assertRaisesRegex(QueryValidationError, "must filter by date, country, or unified_app_id"):
+            validate_read_only_sql(
+                "SELECT country FROM analytics.agg_game_performance_daily\nWHERE downloads > 0",
+                DAILY_ALLOWED,
+            )
 
 
 class DatabaseValidationTests(unittest.TestCase):
