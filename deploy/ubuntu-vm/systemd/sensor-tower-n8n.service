@@ -1,0 +1,17 @@
+[Unit]
+Description=Sensor Tower n8n Workflow Service
+After=network.target sensor-tower-pipeline-api.service
+Requires=sensor-tower-pipeline-api.service
+
+[Service]
+Type=simple
+User=garenavn
+WorkingDirectory=/opt/sensortower_data_system
+EnvironmentFile=-/opt/sensortower_data_system/.env
+Environment=N8N_PORT=5678
+ExecStart=/bin/bash -lc 'bash scripts/start_n8n.sh'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

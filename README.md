@@ -63,6 +63,21 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+All routes other than `/health` require `Authorization: Bearer
+<PIPELINE_API_SERVICE_TOKEN>` when the service token is configured. Set the
+token before making this API reachable from another container or host.
+
+## Mapping artifacts
+
+The reviewed mapping-artifact registry is documented in
+[MAPPING_ARTIFACTS_API.md](MAPPING_ARTIFACTS_API.md). It supports immutable
+Top Down, Bottom Up, generated publisher-ID, and Full Mapping artifacts.
+
+Scheduled staging remains in legacy behavior until
+`MAPPING_ARTIFACT_MODE=artifact` is configured. Before that cutover, import the
+current mapping files with `scripts/ops/bootstrap_mapping_artifacts.py` and
+activate a reviewed Full Mapping artifact.
+
 Main endpoints:
 
 - `POST /validate-inputs`

@@ -1,0 +1,16 @@
+[Unit]
+Description=Sensor Tower Pipeline API
+After=network.target
+
+[Service]
+Type=simple
+User=garenavn
+WorkingDirectory=/opt/sensortower_data_system
+EnvironmentFile=-/opt/sensortower_data_system/.env
+Environment=PIPELINE_API_PORT=8010
+ExecStart=/bin/bash -lc 'source .venv/bin/activate && bash scripts/start_pipeline_api.sh'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

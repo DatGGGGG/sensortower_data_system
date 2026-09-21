@@ -1,0 +1,1721 @@
+{
+  "name": "Sensor Tower Source To Base Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -880
+      ],
+      "id": "10ee14b5-5cad-4579-a82f-0d3073beabac",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 3,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        -688
+      ],
+      "id": "14d8b0d6-715e-44af-9a1d-a4ef09e2340d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const formatter = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Asia/Bangkok',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit'\n});\nconst parts = formatter.formatToParts(new Date());\nconst lookup = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));\nconst today = `${lookup.year}-${lookup.month}-${lookup.day}`;\n\nreturn [\n  {\n    json: {\n      runId: `manual_${Math.floor(Date.now() / 1000)}`,\n      runTimestamp: Math.floor(Date.now() / 1000),\n      triggerMode: 'manual',\n      factsLoadMode: 'daily',\n      configPath: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/config.json',\n      inputRoot: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/data/base',\n      outputRoot: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/data',\n      snapshotStartYear: 2014,\n      performanceEndDate: today\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -880
+      ],
+      "id": "766a674a-a040-4924-abcb-a125d4494b64",
+      "name": "Initialize Manual Run Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "const formatter = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Asia/Bangkok',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit'\n});\nconst parts = formatter.formatToParts(new Date());\nconst lookup = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));\nconst today = `${lookup.year}-${lookup.month}-${lookup.day}`;\nconst month = Number(lookup.month);\nconst day = Number(lookup.day);\nconst isQuarterStart = day === 1 && [1, 4, 7, 10].includes(month);\nconst factsLoadMode = isQuarterStart ? 'quarterly' : 'daily';\nconst runLabel = isQuarterStart ? 'scheduled_quarterly' : 'scheduled_daily';\n\nreturn [\n  {\n    json: {\n      runId: `${runLabel}_${Math.floor(Date.now() / 1000)}`,\n      runTimestamp: Math.floor(Date.now() / 1000),\n      triggerMode: 'scheduled',\n      factsLoadMode,\n      configPath: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/config.json',\n      inputRoot: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/data/base',\n      outputRoot: '/mnt/c/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/data',\n      snapshotStartYear: 2014,\n      performanceEndDate: today,\n      isQuarterStart\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -688
+      ],
+      "id": "4a82860e-f2c7-4103-b3a9-16673044e731",
+      "name": "Initialize Scheduled Run Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/validate-inputs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"scope\": \"source_base\",\n  \"config_path\": \"{{$json.configPath}}\",\n  \"input_root\": \"{{$json.inputRoot}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"facts_load_mode\": \"{{$json.factsLoadMode}}\",\n  \"snapshot_start_year\": {{$json.snapshotStartYear}},\n  \"performance_end_date\": \"{{$json.performanceEndDate}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        448,
+        -784
+      ],
+      "id": "3379aecd-a951-4a48-9a69-872e27a09c9f",
+      "name": "Validate Inputs / Environment"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2f93c209-b0be-4ede-9685-15a2c8abd361",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        -784
+      ],
+      "id": "c7a1bbef-d920-486b-ba85-d912f9c93173",
+      "name": "Validate Inputs Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/fetch-top-game-snapshot",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\",\n  \"snapshot_start_year\": {{$('Validate Inputs / Environment').first().json.snapshot_start_year}},\n  \"performance_end_date\": \"{{$('Validate Inputs / Environment').first().json.performance_end_date}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        896,
+        -784
+      ],
+      "id": "5bfcbd4c-ccd5-4f77-91f2-20fa5b130e30",
+      "name": "Top Game Annual Performance (SNAPSHOT)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cbfde5f4-7f46-4bc7-ac78-235cfc036b23",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1120,
+        -784
+      ],
+      "id": "9116a221-c7cf-4687-976e-6b60d8972433",
+      "name": "Top Game Snapshot Success?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'failed',\n    failed_stage: 'fetch_top_game_snapshot',\n    response: $json\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        -608
+      ],
+      "id": "9eb0ddd3-a09f-4dbf-b907-3e2e0850409e",
+      "name": "Workflow Failure"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/update-top-game-history",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\",\n  \"force_history_rebuild_from_seed\": false\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1344,
+        -704
+      ],
+      "id": "9bf7b4e7-1561-4d99-9b82-c5c5e4e052f1",
+      "name": "Top Game Annual Performance (ALL HISTORY)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "eac9da86-ca61-4bbf-8c0c-38c466a52e0a",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1568,
+        -704
+      ],
+      "id": "f31e8ad8-96b4-44ff-96ee-0a393718d833",
+      "name": "Top Game History Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/materialize-game-list",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1792,
+        -640
+      ],
+      "id": "301e0f0d-37b2-47ad-8336-e91832afffb3",
+      "name": "List of All Games (unified_app_id)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3a87189b-7370-4b78-b85e-104e1b3c4cf1",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2016,
+        -640
+      ],
+      "id": "241d3db7-30b7-474f-9a07-a9d48bca08f0",
+      "name": "List of All Games Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-game-full-info",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2240,
+        -560
+      ],
+      "id": "8beab928-5a1e-47ca-a0d1-adc02d3d4495",
+      "name": "Game Full Info"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ca77bd7e-6b84-47cf-9c78-299db6bdcc4b",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2464,
+        -560
+      ],
+      "id": "1c58b9ee-9cb4-4078-af6d-87171492cc42",
+      "name": "Game Full Info Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/materialize-app-list",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2688,
+        -496
+      ],
+      "id": "3cdc9ce4-24f2-4ad8-99f1-03586c4f7dff",
+      "name": "List of All Apps (app_id)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3558a99d-2f1e-46e1-9aca-cb88ae270f59",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2912,
+        -496
+      ],
+      "id": "eba6b4db-bd34-4b4e-a128-d3d2ce0799e3",
+      "name": "List of All Apps Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-app-full-info",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3136,
+        -208
+      ],
+      "id": "26916a0a-e6e4-414e-8d05-5358c9bacb3e",
+      "name": "App Full Info"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aeda70f0-a9e8-4f54-b3ef-c4ec8d8e9aa3",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3360,
+        -208
+      ],
+      "id": "065e68d0-dab3-4083-bf94-da3df93f6c21",
+      "name": "App Full Info Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-app-performance/start",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -352
+      ],
+      "id": "9b2f6472-bc04-4d68-8702-d1da96047e4d",
+      "name": "Start App Performance Job"
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3808,
+        -352
+      ],
+      "id": "4447f2db-78e1-4b7f-b4b3-b0d0eeb4cc1e",
+      "name": "Wait For App Performance Job"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8010/source-base/build-app-performance/status?job_id={{$json.job_id}}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4032,
+        -352
+      ],
+      "id": "6ec7b8c2-5c0e-4dbe-ac54-8275aaac9a4a",
+      "name": "Check App Performance Job Status"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-app-active-users/start",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -112
+      ],
+      "id": "e80db0ed-9979-4b62-875a-7452ec84a9f7",
+      "name": "Start App Active Users Job"
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3808,
+        -112
+      ],
+      "id": "0d817c78-122c-4bc5-9f85-bd16dd3531bb",
+      "name": "Wait For App Active Users Job"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8010/source-base/build-app-active-users/status?job_id={{$json.job_id}}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4032,
+        -112
+      ],
+      "id": "b1146b5f-210d-453e-a5c1-447c5c966f0f",
+      "name": "Check App Active Users Job Status"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-app-retention/start",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        80
+      ],
+      "id": "0a70ee81-e7bb-4236-a019-f655b15803a5",
+      "name": "Start App Retention Job"
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3808,
+        80
+      ],
+      "id": "f42ff345-761c-45eb-83bd-cad7a4df9123",
+      "name": "Wait For App Retention Job"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8010/source-base/build-app-retention/status?job_id={{$json.job_id}}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4032,
+        80
+      ],
+      "id": "7f0ef87e-2a0b-49d3-a415-1a4111d65ce8",
+      "name": "Check App Retention Job Status"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/source-base/build-user-demographics/start",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        272
+      ],
+      "id": "c7700262-3408-4f9c-af9a-1bc9b14ceca0",
+      "name": "Start User Demographics Job"
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3808,
+        272
+      ],
+      "id": "90fd6dd7-c8fb-4b60-a666-8952cac7a026",
+      "name": "Wait For User Demographics Job"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8010/source-base/build-user-demographics/status?job_id={{$json.job_id}}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4032,
+        272
+      ],
+      "id": "69e70d5d-3129-4b81-b47e-f0f871c5eb84",
+      "name": "Check User Demographics Job Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aeda70f0-a9e8-4f54-b3ef-c4ec8d8e9aa3",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4256,
+        -352
+      ],
+      "id": "1905e394-044e-47cd-ba3f-6aaead706881",
+      "name": "App Performance Success?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c88d8554-07c1-4ff0-b25b-c64ea7156ef3",
+              "leftValue": "={{ ['queued', 'running', 'started'].includes($json.status) ? 'retry' : 'stop' }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4480,
+        -352
+      ],
+      "id": "1ef73141-dd71-4ea7-afd0-102ca6a92dd7",
+      "name": "App Performance Still Running?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aeda70f0-a9e8-4f54-b3ef-c4ec8d8e9aa3",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4256,
+        -112
+      ],
+      "id": "8727bc63-b685-443e-8a10-c4d7dde5834e",
+      "name": "App Active Users Success?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aeda70f0-a9e8-4f54-b3ef-c4ec8d8e9aa3",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4256,
+        80
+      ],
+      "id": "e53d14a4-ce80-4f15-a633-92278288a800",
+      "name": "App Retention Success?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aeda70f0-a9e8-4f54-b3ef-c4ec8d8e9aa3",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4256,
+        272
+      ],
+      "id": "e63e8a6b-275e-46fb-9c33-53e9b78dce39",
+      "name": "User Demographics Success?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f5a1d6ef-a7f2-4937-82f2-695f64d07e93",
+              "leftValue": "={{ ['queued', 'running', 'started'].includes($json.status) ? 'retry' : 'stop' }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4480,
+        -112
+      ],
+      "id": "63a4a7eb-858b-4b2a-b798-8a38fb31d9d5",
+      "name": "App Active Users Still Running?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0b12d76d-4d80-4923-9a7c-7e73b09e657a",
+              "leftValue": "={{ ['queued', 'running', 'started'].includes($json.status) ? 'retry' : 'stop' }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4480,
+        80
+      ],
+      "id": "b9df6e9d-cc53-4a4f-82c7-4d48c9e0558b",
+      "name": "App Retention Still Running?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2d6c945f-c441-4f43-a263-b5b2925fb1ab",
+              "leftValue": "={{ ['queued', 'running', 'started'].includes($json.status) ? 'retry' : 'stop' }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4480,
+        272
+      ],
+      "id": "c63809a9-2c2c-4db6-b511-b1cc2bff2944",
+      "name": "User Demographics Still Running?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/validate-base-outputs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4256,
+        -448
+      ],
+      "id": "a0f4403d-547d-4e73-8447-77eb7275b121",
+      "name": "Validate Base Outputs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ab975bd5-272a-4ba5-9cf8-325c120770da",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4480,
+        -448
+      ],
+      "id": "1ae355f9-0c25-4f1d-89ab-ecf9c1ef1cc2",
+      "name": "Validate Base Outputs Success?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'success',\n    message: 'source_to_base_complete',\n    validation: $json\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        -240
+      ],
+      "id": "acadf557-e076-4cfd-966d-a2bceb87d07e",
+      "name": "Workflow Complete"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4032,
+        -480
+      ],
+      "id": "b2d2a0e0-86e1-44b2-8ae0-2a5bd8cabfa2",
+      "name": "Merge Base Branches"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Initialize Manual Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Initialize Scheduled Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Manual Run Context": {
+      "main": [
+        [
+          {
+            "node": "Validate Inputs / Environment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Inputs / Environment": {
+      "main": [
+        [
+          {
+            "node": "Validate Inputs Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Inputs Success?": {
+      "main": [
+        [
+          {
+            "node": "Top Game Annual Performance (SNAPSHOT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top Game Annual Performance (SNAPSHOT)": {
+      "main": [
+        [
+          {
+            "node": "Top Game Snapshot Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top Game Snapshot Success?": {
+      "main": [
+        [
+          {
+            "node": "Top Game Annual Performance (ALL HISTORY)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top Game Annual Performance (ALL HISTORY)": {
+      "main": [
+        [
+          {
+            "node": "Top Game History Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top Game History Success?": {
+      "main": [
+        [
+          {
+            "node": "List of All Games (unified_app_id)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of All Games (unified_app_id)": {
+      "main": [
+        [
+          {
+            "node": "List of All Games Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of All Games Success?": {
+      "main": [
+        [
+          {
+            "node": "Game Full Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Game Full Info": {
+      "main": [
+        [
+          {
+            "node": "Game Full Info Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Game Full Info Success?": {
+      "main": [
+        [
+          {
+            "node": "List of All Apps (app_id)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of All Apps (app_id)": {
+      "main": [
+        [
+          {
+            "node": "List of All Apps Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of All Apps Success?": {
+      "main": [
+        [
+          {
+            "node": "App Full Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Full Info": {
+      "main": [
+        [
+          {
+            "node": "App Full Info Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Full Info Success?": {
+      "main": [
+        [
+          {
+            "node": "Start App Performance Job",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "App Active Users",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "App Retention",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "User Demographics",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Failure": {
+      "main": [
+        []
+      ]
+    },
+    "Start App Performance Job": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Performance Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For App Performance Job": {
+      "main": [
+        [
+          {
+            "node": "Check App Performance Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check App Performance Job Status": {
+      "main": [
+        [
+          {
+            "node": "App Performance Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start App Active Users Job": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Active Users Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For App Active Users Job": {
+      "main": [
+        [
+          {
+            "node": "Check App Active Users Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check App Active Users Job Status": {
+      "main": [
+        [
+          {
+            "node": "App Active Users Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start App Retention Job": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Retention Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For App Retention Job": {
+      "main": [
+        [
+          {
+            "node": "Check App Retention Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check App Retention Job Status": {
+      "main": [
+        [
+          {
+            "node": "App Retention Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start User Demographics Job": {
+      "main": [
+        [
+          {
+            "node": "Wait For User Demographics Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For User Demographics Job": {
+      "main": [
+        [
+          {
+            "node": "Check User Demographics Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check User Demographics Job Status": {
+      "main": [
+        [
+          {
+            "node": "User Demographics Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Performance Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Base Branches",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "App Performance Still Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Performance Still Running?": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Performance Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Active Users Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Base Branches",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "App Active Users Still Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Active Users Still Running?": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Active Users Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Retention Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Base Branches",
+            "type": "main",
+            "index": 2
+          }
+        ],
+        [
+          {
+            "node": "App Retention Still Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Retention Still Running?": {
+      "main": [
+        [
+          {
+            "node": "Wait For App Retention Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User Demographics Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Base Branches",
+            "type": "main",
+            "index": 3
+          }
+        ],
+        [
+          {
+            "node": "User Demographics Still Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User Demographics Still Running?": {
+      "main": [
+        [
+          {
+            "node": "Wait For User Demographics Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Base Outputs": {
+      "main": [
+        [
+          {
+            "node": "Validate Base Outputs Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Base Outputs Success?": {
+      "main": [
+        [
+          {
+            "node": "Workflow Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Base Branches": {
+      "main": [
+        [
+          {
+            "node": "Validate Base Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Scheduled Run Context": {
+      "main": [
+        [
+          {
+            "node": "Validate Inputs / Environment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "Asia/Bangkok"
+  },
+  "versionId": "eb7e733b-9406-4429-8684-9f5d54396288",
+  "meta": {
+    "instanceId": "aeae7d5ca95fde589808054f312644aa2777f3d295e82d80feb9839654fe8e95"
+  },
+  "nodeGroups": [],
+  "id": "3d4aseFeR3IGzDRH",
+  "tags": []
+}

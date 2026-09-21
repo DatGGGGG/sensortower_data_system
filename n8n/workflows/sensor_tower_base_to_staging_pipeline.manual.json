@@ -1,0 +1,685 @@
+{
+  "name": "Sensor Tower Base To Staging Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -240
+      ],
+      "id": "2e2b3d2d-5d96-4fe2-bcf1-71eeea8d5001",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const baseRunTimestamp = 1783335888;\nconst baseRunId = 'manual_full_1783335888';\n\nreturn [\n  {\n    json: {\n      runId: baseRunId,\n      runTimestamp: baseRunTimestamp,\n      triggerMode: 'manual',\n      configPath: '/mnt/d/Coding/vn_strategy_data_system/config.json',\n      outputRoot: '/mnt/d/Coding/vn_strategy_data_system/data',\n      gameInfoAdjustment: '/mnt/c/Users/VEE0634/Downloads/st_game_info_adjustment_1766745155.csv',\n      mappingPublisherToAppsTopDown: '/mnt/c/Users/VEE0634/Downloads/st_manualsearch_mapping_publisher_to_apps_top_down_1776162132.csv',\n      mappingPublisherToPublisheridsRevenueMultiplierBottomUp: '/mnt/c/Users/VEE0634/Downloads/st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_1770897976.csv.csv',\n      mappingAppToRevenueMultiplierSpecialCases: '/mnt/c/Users/VEE0634/Downloads/st_mapping_app_to_revenue_multiplier_special_case_1777878606.csv'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -240
+      ],
+      "id": "7553d77f-b25d-40f0-aeb6-d0dc0270a7c1",
+      "name": "Initialize Staging Run Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/game-full-info-adjusted",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$json.configPath}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"game_info_adjustment\": \"{{$json.gameInfoAdjustment}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        -352
+      ],
+      "id": "0cd1327a-2c48-4fe0-b1d4-e29413179001",
+      "name": "Game Full Info (Adjusted)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "95db8531-8c5f-4c9f-a7a8-a5f853d07611",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        704,
+        -352
+      ],
+      "id": "bfebd092-0d07-43a1-b258-e0dcce17e0e2",
+      "name": "Game Full Info (Adjusted) Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/publisher-mapping-top-down",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$json.configPath}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"mapping_publisher_to_apps_top_down\": \"{{$json.mappingPublisherToAppsTopDown}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        -96
+      ],
+      "id": "3e39a2bd-5f2b-4ff9-8fb0-62bfc35f52c5",
+      "name": "Mapping Publisher to Apps and Publisher IDs (Top Down)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4b1dcb3e-25a0-4d03-8d68-a2d5b52df34b",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        704,
+        -96
+      ],
+      "id": "6159f990-9ccf-43de-b00a-df3f2d2130d4",
+      "name": "Publisher Mapping Top Down Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/publisher-revenue-mapping-full",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\",\n  \"mapping_publisher_to_publisherids_revenue_multiplier_bottom_up\": \"{{$('Initialize Staging Run Context').first().json.mappingPublisherToPublisheridsRevenueMultiplierBottomUp}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        928,
+        -96
+      ],
+      "id": "1b1e6a47-a3a4-4af8-9f13-967d8d9cde04",
+      "name": "Mapping Publisher to Publisher ID and Revenue Multiplier (Full)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "53b73777-8693-468e-bd8d-bcb427ffcd34",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1152,
+        -96
+      ],
+      "id": "72a34d0d-c7ab-4061-886d-ad3ee3232fd9",
+      "name": "Publisher Revenue Mapping Full Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/app-full-info-adjusted",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\",\n  \"mapping_app_to_revenue_multiplier_special_cases\": \"{{$('Initialize Staging Run Context').first().json.mappingAppToRevenueMultiplierSpecialCases}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1376,
+        -96
+      ],
+      "id": "3a0a83fa-a1de-4f69-a850-cfa23c18c2b8",
+      "name": "App Full Info (Adjusted)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5c7d70b8-f65f-4c81-984d-9f45659b5200",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1600,
+        -96
+      ],
+      "id": "3a8b4fa0-a331-4b0b-b443-0ba0cf79b663",
+      "name": "App Full Info (Adjusted) Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/app-performance-daily-revenue-adjusted",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1824,
+        -96
+      ],
+      "id": "97b174ea-45c9-44cd-b10d-b40576324210",
+      "name": "App Performance (Daily) - Revenue Adjusted"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f32a3a6e-b742-4eff-8f20-618409c6e7c7",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2048,
+        -96
+      ],
+      "id": "417f282e-2c32-42e3-9cd1-bae45363aa88",
+      "name": "App Performance Revenue Adjusted Success?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8010/base-staging/app-active-users-current-ndjson",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\"\n}",
+        "options": {
+          "timeout": 259200000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.PIPELINE_API_SERVICE_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1824,
+        96
+      ],
+      "id": "e10a95db-9938-48ed-9075-0ec6c819a879",
+      "name": "App Active Users Current NDJSON"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4d7ce16b-487a-4fcf-b6be-c73c219c72dc",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2048,
+        96
+      ],
+      "id": "a64d2414-d12d-42ff-a8c0-d8e8ba31a478",
+      "name": "App Active Users Current NDJSON Success?"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2272,
+        -224
+      ],
+      "id": "6a3b3f04-d881-43e8-9642-a4457c8f2b68",
+      "name": "Merge Staging Branches"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'success',\n    message: 'base_to_staging_complete',\n    runId: $('Initialize Staging Run Context').first().json.runId,\n    runTimestamp: $('Initialize Staging Run Context').first().json.runTimestamp\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        -224
+      ],
+      "id": "a3fb435b-d4d2-4e4e-ba92-b46058cbc715",
+      "name": "Workflow Complete"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'failed',\n    response: $json\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        96
+      ],
+      "id": "7ea7a1a5-f7bf-45ce-8228-886b86580454",
+      "name": "Workflow Failure"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Initialize Staging Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Staging Run Context": {
+      "main": [
+        [
+          {
+            "node": "Game Full Info (Adjusted)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mapping Publisher to Apps and Publisher IDs (Top Down)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Game Full Info (Adjusted)": {
+      "main": [
+        [
+          {
+            "node": "Game Full Info (Adjusted) Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Game Full Info (Adjusted) Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Staging Branches",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mapping Publisher to Apps and Publisher IDs (Top Down)": {
+      "main": [
+        [
+          {
+            "node": "Publisher Mapping Top Down Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publisher Mapping Top Down Success?": {
+      "main": [
+        [
+          {
+            "node": "Mapping Publisher to Publisher ID and Revenue Multiplier (Full)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mapping Publisher to Publisher ID and Revenue Multiplier (Full)": {
+      "main": [
+        [
+          {
+            "node": "Publisher Revenue Mapping Full Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publisher Revenue Mapping Full Success?": {
+      "main": [
+        [
+          {
+            "node": "App Full Info (Adjusted)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Full Info (Adjusted)": {
+      "main": [
+        [
+          {
+            "node": "App Full Info (Adjusted) Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Full Info (Adjusted) Success?": {
+      "main": [
+        [
+          {
+            "node": "App Performance (Daily) - Revenue Adjusted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "App Active Users Current NDJSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Performance (Daily) - Revenue Adjusted": {
+      "main": [
+        [
+          {
+            "node": "App Performance Revenue Adjusted Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Performance Revenue Adjusted Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Staging Branches",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Active Users Current NDJSON": {
+      "main": [
+        [
+          {
+            "node": "App Active Users Current NDJSON Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Active Users Current NDJSON Success?": {
+      "main": [
+        [
+          {
+            "node": "Merge Staging Branches",
+            "type": "main",
+            "index": 2
+          }
+        ],
+        [
+          {
+            "node": "Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Staging Branches": {
+      "main": [
+        [
+          {
+            "node": "Workflow Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Failure": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "Asia/Bangkok"
+  },
+  "versionId": "fb7c228b-2f9c-4d52-b801-2026070701",
+  "meta": {
+    "instanceId": "aeae7d5ca95fde589808054f312644aa2777f3d295e82d80feb9839654fe8e95"
+  },
+  "nodeGroups": [],
+  "id": "9V8fS6YdA3nB2mLq",
+  "tags": []
+}

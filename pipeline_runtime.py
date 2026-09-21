@@ -24,6 +24,8 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from mapping_artifacts import MappingArtifactRegistry
+
 LIB_DIR = Path(__file__).resolve().parent / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.append(str(LIB_DIR))
@@ -39,6 +41,7 @@ DEFAULT_REVIEWS_LIMIT = 200
 DEFAULT_FACTS_LOAD_MODE = "daily"
 DEFAULT_SNAPSHOT_MARKETS = "VN"
 DEFAULT_FACT_COUNTRY_CODES = "VN"
+MAPPING_ARTIFACT_MODES = frozenset({"legacy", "artifact"})
 FULL_LOAD_MODE = "full"
 DAILY_LOAD_MODE = "daily"
 WEEKLY_LOAD_MODE = "weekly"
@@ -164,6 +167,26 @@ def _utc_now_iso() -> str:
 def _load_config(config_path: Path) -> dict[str, Any]:
     with open(config_path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _mapping_artifact_mode() -> str:
+    mode = os.environ.get("MAPPING_ARTIFACT_MODE", "legacy").strip().lower()
+    if mode not in MAPPING_ARTIFACT_MODES:
+        raise ValueError(
+            "MAPPING_ARTIFACT_MODE must be either 'legacy' or 'artifact'."
+        )
+    return mode
+
+
+def _mapping_artifact_registry(ctx: PipelineContext) -> MappingArtifactRegistry:
+    configured_data_root = os.environ.get("PIPELINE_DATA_ROOT", "").strip()
+    data_root = Path(configured_data_root).expanduser() if configured_data_root else ctx.output_root
+    registry = MappingArtifactRegistry(data_root)
+    if configured_data_root and ctx.output_root.resolve() != registry.data_root:
+        raise ValueError(
+            "Artifact-mode staging requires output_root to match PIPELINE_DATA_ROOT."
+        )
+    return registry
 
 
 def _coerce_runtime_path(raw_value: Any, *, repo_root: Optional[Path] = None) -> Path:
@@ -844,12 +867,22 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
     current_output_files: dict[str, str] = {}
     stage_order = STAGING_STAGE_ORDER if stage == "all" else [stage]
     stage_name = stage_order[0] if stage_order else "unknown"
+    mapping_artifact_mode = _mapping_artifact_mode()
 
     try:
-        _read_api_key(ctx.repo_root)
+        # Artifact mode materializes reviewed bytes and intentionally does not
+        # call SensorTower again for publisher enrichment during scheduled ETL.
+        if mapping_artifact_mode == "legacy" and "publisher_mapping_top_down" in stage_order:
+            _read_api_key(ctx.repo_root)
         for stage_name in stage_order:
             if stage_name == "publisher_mapping_top_down":
                 def _run() -> dict[str, Any]:
+                    if mapping_artifact_mode == "artifact":
+                        metrics = _mapping_artifact_registry(ctx).materialize_active_enriched_top_down(
+                            state_outputs["publisher_mapping_top_down_current"]
+                        )
+                        metrics["mapping_artifact_mode"] = mapping_artifact_mode
+                        return metrics
                     api_key = _read_api_key(ctx.repo_root)
                     df_mapping = lsdp.create_mapping_publisher_to_apps_publisherids(
                         resolved_inputs["mapping_publisher_to_apps_top_down"],
@@ -862,9 +895,11 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                         "file_size_bytes": _file_size(state_outputs["publisher_mapping_top_down_current"]),
                     }
 
-                current_input_files = {
-                    "mapping_publisher_to_apps_top_down": resolved_inputs["mapping_publisher_to_apps_top_down"]
-                }
+                current_input_files = (
+                    {"active_full_mapping": "mapping_artifacts://active/full"}
+                    if mapping_artifact_mode == "artifact"
+                    else {"mapping_publisher_to_apps_top_down": resolved_inputs["mapping_publisher_to_apps_top_down"]}
+                )
                 current_output_files = {
                     "publisher_mapping_top_down_current": str(state_outputs["publisher_mapping_top_down_current"])
                 }
@@ -878,6 +913,12 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
 
             elif stage_name == "publisher_revenue_mapping_full":
                 def _run() -> dict[str, Any]:
+                    if mapping_artifact_mode == "artifact":
+                        metrics = _mapping_artifact_registry(ctx).materialize_active_full(
+                            staging_outputs["publisher_revenue_mapping_full"]
+                        )
+                        metrics["mapping_artifact_mode"] = mapping_artifact_mode
+                        return metrics
                     top_down_types = {
                         "os_x": "string",
                         "cleaned_publisher_name": "string",
@@ -908,10 +949,14 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                         "file_size_bytes": _file_size(staging_outputs["publisher_revenue_mapping_full"]),
                     }
 
-                current_input_files = {
-                    "publisher_mapping_top_down_current": str(state_outputs["publisher_mapping_top_down_current"]),
-                    "mapping_publisher_to_publisherids_revenue_multiplier_bottom_up": resolved_inputs["mapping_publisher_to_publisherids_revenue_multiplier_bottom_up"],
-                }
+                current_input_files = (
+                    {"active_full_mapping": "mapping_artifacts://active/full"}
+                    if mapping_artifact_mode == "artifact"
+                    else {
+                        "publisher_mapping_top_down_current": str(state_outputs["publisher_mapping_top_down_current"]),
+                        "mapping_publisher_to_publisherids_revenue_multiplier_bottom_up": resolved_inputs["mapping_publisher_to_publisherids_revenue_multiplier_bottom_up"],
+                    }
+                )
                 current_output_files = {
                     "publisher_revenue_mapping_full": str(staging_outputs["publisher_revenue_mapping_full"])
                 }
