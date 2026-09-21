@@ -64,7 +64,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/validate-inputs",
+        "url": "http://172.17.0.1:8010/validate-inputs",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"scope\": \"source_base\",\n  \"config_path\": \"{{$json.configPath}}\",\n  \"input_root\": \"{{$json.inputRoot}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"facts_load_mode\": \"{{$json.factsLoadMode}}\",\n  \"snapshot_start_year\": {{$json.snapshotStartYear}},\n  \"performance_end_date\": \"{{$json.performanceEndDate}}\"\n}",
@@ -125,7 +125,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/fetch-top-game-snapshot",
+        "url": "http://172.17.0.1:8010/source-base/fetch-top-game-snapshot",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\",\n  \"snapshot_start_year\": {{$('Validate Inputs / Environment').first().json.snapshot_start_year}},\n  \"performance_end_date\": \"{{$('Validate Inputs / Environment').first().json.performance_end_date}}\"\n}",
@@ -201,7 +201,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/update-top-game-history",
+        "url": "http://172.17.0.1:8010/source-base/update-top-game-history",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\",\n  \"force_history_rebuild_from_seed\": false\n}",
@@ -261,7 +261,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/materialize-game-list",
+        "url": "http://172.17.0.1:8010/source-base/materialize-game-list",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -322,7 +322,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-game-full-info",
+        "url": "http://172.17.0.1:8010/source-base/build-game-full-info",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -385,7 +385,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/materialize-app-list",
+        "url": "http://172.17.0.1:8010/source-base/materialize-app-list",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -446,7 +446,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-app-full-info",
+        "url": "http://172.17.0.1:8010/source-base/build-app-full-info",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -509,7 +509,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-app-performance/start",
+        "url": "http://172.17.0.1:8010/source-base/build-app-performance/start",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -550,7 +550,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=http://127.0.0.1:8010/source-base/build-app-performance/status?job_id={{$json.job_id}}",
+        "url": "=http://172.17.0.1:8010/source-base/build-app-performance/status?job_id={{$json.job_id}}",
         "options": {},
         "sendHeaders": true,
         "headerParameters": {
@@ -574,7 +574,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-app-active-users/start",
+        "url": "http://172.17.0.1:8010/source-base/build-app-active-users/start",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -615,7 +615,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=http://127.0.0.1:8010/source-base/build-app-active-users/status?job_id={{$json.job_id}}",
+        "url": "=http://172.17.0.1:8010/source-base/build-app-active-users/status?job_id={{$json.job_id}}",
         "options": {},
         "sendHeaders": true,
         "headerParameters": {
@@ -639,7 +639,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-app-retention/start",
+        "url": "http://172.17.0.1:8010/source-base/build-app-retention/start",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -680,7 +680,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=http://127.0.0.1:8010/source-base/build-app-retention/status?job_id={{$json.job_id}}",
+        "url": "=http://172.17.0.1:8010/source-base/build-app-retention/status?job_id={{$json.job_id}}",
         "options": {},
         "sendHeaders": true,
         "headerParameters": {
@@ -704,7 +704,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/source-base/build-user-demographics/start",
+        "url": "http://172.17.0.1:8010/source-base/build-user-demographics/start",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",
@@ -745,7 +745,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=http://127.0.0.1:8010/source-base/build-user-demographics/status?job_id={{$json.job_id}}",
+        "url": "=http://172.17.0.1:8010/source-base/build-user-demographics/status?job_id={{$json.job_id}}",
         "options": {},
         "sendHeaders": true,
         "headerParameters": {
@@ -1041,7 +1041,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/validate-base-outputs",
+        "url": "http://172.17.0.1:8010/validate-base-outputs",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Validate Inputs / Environment').first().json.config_path}}\",\n  \"input_root\": \"{{$('Validate Inputs / Environment').first().json.input_root}}\",\n  \"output_root\": \"{{$('Validate Inputs / Environment').first().json.output_root}}\",\n  \"run_id\": \"{{$('Validate Inputs / Environment').first().json.run_id}}\",\n  \"run_timestamp\": {{$('Validate Inputs / Environment').first().json.run_timestamp}},\n  \"trigger_mode\": \"{{$('Validate Inputs / Environment').first().json.trigger_mode}}\",\n  \"facts_load_mode\": \"{{$('Validate Inputs / Environment').first().json.facts_load_mode}}\"\n}",

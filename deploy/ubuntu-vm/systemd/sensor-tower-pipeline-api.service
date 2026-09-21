@@ -1,6 +1,7 @@
 [Unit]
 Description=Sensor Tower Pipeline API
-After=network.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple

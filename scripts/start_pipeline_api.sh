@@ -3,8 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${ROOT_DIR}/.venv"
-HOST="${PIPELINE_API_HOST:-127.0.0.1}"
-PORT="${PIPELINE_API_PORT:-8000}"
 
 cd "${ROOT_DIR}"
 
@@ -14,6 +12,9 @@ if [ -f "${ROOT_DIR}/.env" ]; then
   source "${ROOT_DIR}/.env"
   set +a
 fi
+
+HOST="${PIPELINE_API_HOST:-127.0.0.1}"
+PORT="${PIPELINE_API_PORT:-8000}"
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"

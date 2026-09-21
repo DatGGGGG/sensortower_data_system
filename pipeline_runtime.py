@@ -861,13 +861,21 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
     )
     state_outputs = _source_base_state_outputs(ctx.output_root)
     staging_outputs = _staging_current_outputs(ctx.output_root)
+    run_scoped_staging_outputs = _staging_outputs(ctx.output_root, ctx.run_timestamp)
+    mapping_artifact_mode = _mapping_artifact_mode()
+    stage_order = STAGING_STAGE_ORDER if stage == "all" else [stage]
+    full_mapping_path = (
+        run_scoped_staging_outputs["publisher_revenue_mapping_full"]
+        if mapping_artifact_mode == "artifact"
+        else staging_outputs["publisher_revenue_mapping_full"]
+    )
     summary = _base_summary(ctx, stage)
     summary["expected_outputs"] = expected_staging_current_output_paths(ctx.output_root)
+    if mapping_artifact_mode == "artifact":
+        summary["expected_outputs"]["publisher_revenue_mapping_full_run_scoped"] = str(full_mapping_path.resolve())
     current_input_files: dict[str, str] = {}
     current_output_files: dict[str, str] = {}
-    stage_order = STAGING_STAGE_ORDER if stage == "all" else [stage]
     stage_name = stage_order[0] if stage_order else "unknown"
-    mapping_artifact_mode = _mapping_artifact_mode()
 
     try:
         # Artifact mode materializes reviewed bytes and intentionally does not
@@ -915,7 +923,8 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                 def _run() -> dict[str, Any]:
                     if mapping_artifact_mode == "artifact":
                         metrics = _mapping_artifact_registry(ctx).materialize_active_full(
-                            staging_outputs["publisher_revenue_mapping_full"]
+                            full_mapping_path,
+                            current_destination=staging_outputs["publisher_revenue_mapping_full"],
                         )
                         metrics["mapping_artifact_mode"] = mapping_artifact_mode
                         return metrics
@@ -958,7 +967,8 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                     }
                 )
                 current_output_files = {
-                    "publisher_revenue_mapping_full": str(staging_outputs["publisher_revenue_mapping_full"])
+                    "publisher_revenue_mapping_full": str(full_mapping_path),
+                    "publisher_revenue_mapping_full_current": str(staging_outputs["publisher_revenue_mapping_full"]),
                 }
                 stage_result = _execute_stage(
                     ctx,
@@ -970,10 +980,17 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
 
             elif stage_name == "app_full_info_adjusted_ndjson":
                 def _run() -> dict[str, Any]:
+                    if mapping_artifact_mode == "artifact":
+                        # A direct retry of this downstream stage must still use
+                        # the current active Full Mapping for its run timestamp.
+                        _mapping_artifact_registry(ctx).materialize_active_full(
+                            full_mapping_path,
+                            current_destination=staging_outputs["publisher_revenue_mapping_full"],
+                        )
                     stats = lsdp.adjust_ndjson_app_full_info(
                         input_ndjson_path=str(state_outputs["app_full_info_current"]),
                         output_ndjson_path=str(staging_outputs["app_full_info_adjusted_ndjson"]),
-                        publisher_mapping_csv_path=str(staging_outputs["publisher_revenue_mapping_full"]),
+                        publisher_mapping_csv_path=str(full_mapping_path),
                         special_case_csv_path=resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
                     )
                     return {
@@ -984,7 +1001,7 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
 
                 current_input_files = {
                     "app_full_info_current": str(state_outputs["app_full_info_current"]),
-                    "publisher_revenue_mapping_full": str(staging_outputs["publisher_revenue_mapping_full"]),
+                    "publisher_revenue_mapping_full": str(full_mapping_path),
                     "mapping_app_to_revenue_multiplier_special_cases": resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
                 }
                 current_output_files = {

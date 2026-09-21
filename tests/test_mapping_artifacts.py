@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -40,9 +41,30 @@ class MappingArtifactRegistryTests(unittest.TestCase):
         first = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
         second = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
         self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["type"], "top_down_raw")
+        self.assertEqual(first["sha256_checksum"], first["checksum_sha256"])
+        self.assertEqual(first["source_workbench_version"], "version-1")
+        self.assertEqual(first["validation_summary"], first["validation"])
+        self.assertRegex(
+            first["relative_path"],
+            r"^base/st_manualsearch_mapping_publisher_to_apps_top_down_\d+.*\.csv$",
+        )
 
         with self.assertRaisesRegex(MappingArtifactError, "already published"):
             self.publish("top_down_raw", TOP_DOWN_RAW + b"android,Publisher B,Game B,https://example.test/b,com.example.b\n", "version-1")
+
+    def test_concurrent_publish_retries_create_one_artifact(self) -> None:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            artifacts = list(
+                executor.map(
+                    lambda _: self.publish("top_down_raw", TOP_DOWN_RAW, "concurrent-version"),
+                    range(8),
+                )
+            )
+
+        self.assertEqual(len({artifact["id"] for artifact in artifacts}), 1)
+        stored = self.registry.list_artifacts(artifact_type="top_down_raw")
+        self.assertEqual(len(stored), 1)
 
     def test_publish_rejects_invalid_raw_artifacts(self) -> None:
         invalid = TOP_DOWN_RAW.replace(b"Game A", b"")
@@ -104,11 +126,52 @@ class MappingArtifactRegistryTests(unittest.TestCase):
         self.assertEqual(committed["status"], "committed")
         active = self.registry.activate(committed["id"], "operator")
         self.assertEqual(active["full"]["artifact"]["id"], committed["id"])
+        self.assertRegex(
+            committed["relative_path"],
+            r"^staging/st_mapping_publisher_to_publisherids_revenue_multiplier_full_\d+.*\.csv$",
+        )
 
         destination = self.root / "staging" / "full_current.csv"
-        metrics = self.registry.materialize_active_full(destination)
+        current_destination = self.root / "staging" / "full_legacy_current.csv"
+        metrics = self.registry.materialize_active_full(destination, current_destination=current_destination)
         self.assertEqual(destination.read_bytes(), self.registry.read_artifact(committed["id"]).content)
+        self.assertEqual(current_destination.read_bytes(), destination.read_bytes())
         self.assertEqual(metrics["source_artifact_id"], committed["id"])
+        self.assertEqual(metrics["run_scoped_output_path"], str(destination.resolve()))
+
+    def test_full_draft_with_blank_required_values_cannot_be_committed(self) -> None:
+        raw = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
+        enriched = self.registry.bootstrap_import(
+            artifact_type="top_down_with_publisher_ids",
+            content=TOP_DOWN_ENRICHED,
+            created_by="bootstrap",
+            source_artifact_ids=[raw["id"]],
+            source_artifact_checksums={raw["id"]: raw["checksum_sha256"]},
+        )
+        bottom_up = self.publish("bottom_up", BOTTOM_UP, "version-2")
+        invalid_full = __import__("pandas").DataFrame(
+            [
+                {
+                    "cleaned_publisher_name": "",
+                    "publisher_id": "publisher-a",
+                    "publisher_name": "Publisher A",
+                    "revenue_multiplier": 3,
+                }
+            ]
+        )
+        draft = self.registry.generate_full(
+            top_down_artifact_id=enriched["id"],
+            bottom_up_artifact_id=bottom_up["id"],
+            created_by="tester",
+            generator_version="test",
+            repository_git_sha="test",
+            merge=Mock(return_value=invalid_full),
+        )
+
+        self.assertEqual(draft["status"], "draft")
+        self.assertFalse(draft["validation"]["valid"])
+        with self.assertRaisesRegex(MappingArtifactError, "blank required fields"):
+            self.registry.commit(draft["id"], "reviewer")
 
     def test_corrupt_file_is_rejected_before_use(self) -> None:
         raw = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")

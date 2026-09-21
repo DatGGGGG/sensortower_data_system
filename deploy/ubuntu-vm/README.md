@@ -7,8 +7,8 @@ This folder contains the deployment notes and service templates for moving the c
 Two long-running processes:
 
 1. `pipeline_api.py`
-   - local HTTP API that n8n calls
-   - recommended bind: `127.0.0.1:8010`
+   - private HTTP API that n8n and the cleaning workbench call
+   - recommended bind: Docker bridge address `172.17.0.1:8010`
 
 2. `n8n`
    - workflow UI and scheduler
@@ -17,7 +17,7 @@ Two long-running processes:
 Recommended architecture:
 
 - n8n and the Python pipeline run on the same VM
-- n8n calls the Python API at `http://127.0.0.1:8010`
+- n8n calls the Python API at `http://172.17.0.1:8010`
 - workflow import file:
   - [sensor_tower_source_to_base_pipeline.scheduled_modes.json](/C:/Users/VEE0634/Desktop/Coding/vn_strategy_data_system/n8n/workflows/sensor_tower_source_to_base_pipeline.scheduled_modes.json)
 
@@ -59,14 +59,17 @@ Then create `.env`:
 cat > .env <<'EOF'
 ST_API_KEY=replace_me
 PIPELINE_API_SERVICE_TOKEN=replace_with_a_long_random_secret
-PIPELINE_API_HOST=127.0.0.1
+# Default Docker bridge address; verify with: ip -4 addr show docker0
+PIPELINE_API_HOST=172.17.0.1
+PIPELINE_API_PORT=8010
 MAPPING_ARTIFACT_MODE=legacy
 EOF
 ```
 
 See [MAPPING_ARTIFACTS_API.md](../../MAPPING_ARTIFACTS_API.md) before exposing
-the pipeline API to the cleaning-workbench container. All non-health routes are
-bearer protected once `PIPELINE_API_SERVICE_TOKEN` is configured.
+the pipeline API to the cleaning-workbench container. This binds only to the
+Docker bridge, not the VM's public interface. All non-health routes are bearer
+protected once `PIPELINE_API_SERVICE_TOKEN` is configured.
 
 ## Start Locally First Before Systemd
 
@@ -76,14 +79,30 @@ Before installing services, verify both processes manually.
 
 ```bash
 source .venv/bin/activate
-PIPELINE_API_PORT=8010 bash scripts/start_pipeline_api.sh
+PIPELINE_API_HOST=172.17.0.1 PIPELINE_API_PORT=8010 bash scripts/start_pipeline_api.sh
 ```
 
 Health check:
 
 ```bash
-curl http://127.0.0.1:8010/health
+curl http://172.17.0.1:8010/health
 ```
+
+For the cleaning-workbench Docker container, add this Compose setting in its
+own repository, then test from inside that container:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+```bash
+curl -i http://host.docker.internal:8010/health
+curl -i http://host.docker.internal:8010/mapping-artifacts
+```
+
+The first request must return `200`; the second must return `401`. Do not use
+`0.0.0.0` or publish port `8010` through the workbench container.
 
 ### 2. Start n8n
 
@@ -119,10 +138,10 @@ After import, verify:
      - `factsLoadMode = 'quarterly'` on quarter-start days
      - `factsLoadMode = 'daily'` otherwise
 
-3. All HTTP nodes point to:
+3. All HTTP nodes point to the verified Docker bridge address:
 
 ```text
-http://127.0.0.1:8010
+http://172.17.0.1:8010
 ```
 
 4. Every non-health HTTP node sends:

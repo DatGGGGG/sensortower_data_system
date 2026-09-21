@@ -18,7 +18,46 @@ BOTTOM_UP = b"cleaned_publisher_name,publisher_id,publisher_name,revenue_multipl
 
 
 class MappingArtifactPipelineTests(unittest.TestCase):
-    def test_artifact_mode_materializes_current_files_without_enrichment_or_merge(self) -> None:
+    @staticmethod
+    def create_context(root: Path, data_root: Path) -> runtime.PipelineContext:
+        special_cases_path = root / "special_cases.csv"
+        special_cases_path.write_text("app_id,revenue_multiplier\n", encoding="utf-8")
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps({"MAPPING_APP_TO_REVENUE_MULTIPLIER_SPECIAL_CASES": str(special_cases_path)}),
+            encoding="utf-8",
+        )
+        return runtime.create_context(
+            SimpleNamespace(
+                config_path=str(config_path),
+                input_root=str(data_root / "base"),
+                output_root=str(data_root),
+                run_id="artifact-test",
+                run_timestamp=1,
+                trigger_mode="test",
+                performance_end_date=None,
+                facts_load_mode=None,
+                facts_start_date=None,
+                snapshot_start_year=None,
+                snapshot_end_year=None,
+                snapshot_regions=None,
+                fact_country_codes=None,
+                snapshot_category=None,
+                snapshot_custom_fields_filter_id=None,
+                snapshot_data_model=None,
+                snapshot_target_count=None,
+                game_list_limit=None,
+                game_list_source=None,
+                force_history_rebuild_from_seed=None,
+                force_fail_stage=None,
+                mapping_publisher_to_apps_top_down=None,
+                mapping_publisher_to_publisherids_revenue_multiplier_bottom_up=None,
+                mapping_app_to_revenue_multiplier_special_cases=None,
+                game_info_adjustment=None,
+            )
+        )
+
+    def test_artifact_mode_materializes_run_scoped_and_current_files_without_enrichment_or_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_root = root / "data"
@@ -43,49 +82,28 @@ class MappingArtifactPipelineTests(unittest.TestCase):
                 },
             )
             registry.activate(full["id"], "bootstrap")
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps({}), encoding="utf-8")
-            ctx = runtime.create_context(
-                SimpleNamespace(
-                    config_path=str(config_path),
-                    input_root=str(data_root / "base"),
-                    output_root=str(data_root),
-                    run_id="artifact-test",
-                    run_timestamp=1,
-                    trigger_mode="test",
-                    performance_end_date=None,
-                    facts_load_mode=None,
-                    facts_start_date=None,
-                    snapshot_start_year=None,
-                    snapshot_end_year=None,
-                    snapshot_regions=None,
-                    fact_country_codes=None,
-                    snapshot_category=None,
-                    snapshot_custom_fields_filter_id=None,
-                    snapshot_data_model=None,
-                    snapshot_target_count=None,
-                    game_list_limit=None,
-                    game_list_source=None,
-                    force_history_rebuild_from_seed=None,
-                    force_fail_stage=None,
-                    mapping_publisher_to_apps_top_down=None,
-                    mapping_publisher_to_publisherids_revenue_multiplier_bottom_up=None,
-                    mapping_app_to_revenue_multiplier_special_cases=None,
-                    game_info_adjustment=None,
-                )
-            )
+            ctx = self.create_context(root, data_root)
+            observed_mapping_paths: list[str] = []
+
+            def adjust_app_info(**kwargs: str) -> dict[str, int]:
+                observed_mapping_paths.append(kwargs["publisher_mapping_csv_path"])
+                Path(kwargs["output_ndjson_path"]).write_text("", encoding="utf-8")
+                return {"records_written": 0, "skipped_duplicates": 0}
+
             with patch.dict(
                 os.environ,
                 {"MAPPING_ARTIFACT_MODE": "artifact", "PIPELINE_DATA_ROOT": str(data_root)},
                 clear=False,
             ), patch.object(runtime.lsdp, "create_mapping_publisher_to_apps_publisherids") as enrich, patch.object(
                 runtime.lsdp, "create_mapping_publisher_to_publisherids_revenue_multiplier"
-            ) as merge:
+            ) as merge, patch.object(runtime.lsdp, "adjust_ndjson_app_full_info", side_effect=adjust_app_info):
                 first = runtime.run_staging_pipeline(ctx, stage="publisher_mapping_top_down")
                 second = runtime.run_staging_pipeline(ctx, stage="publisher_revenue_mapping_full")
+                third = runtime.run_staging_pipeline(ctx, stage="app_full_info_adjusted_ndjson")
 
             self.assertEqual(first["status"], "success")
             self.assertEqual(second["status"], "success")
+            self.assertEqual(third["status"], "success")
             self.assertEqual(
                 (data_root / "base" / "st_api_mapping_publisher_to_apps_publisherids_top_down_current.csv").read_bytes(),
                 TOP_DOWN_ENRICHED,
@@ -94,7 +112,46 @@ class MappingArtifactPipelineTests(unittest.TestCase):
                 (data_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_current.csv").read_bytes(),
                 BOTTOM_UP,
             )
+            self.assertEqual(
+                (data_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_1.csv").read_bytes(),
+                BOTTOM_UP,
+            )
+            full_stage = second["stage_results"][0]
+            self.assertEqual(
+                full_stage["metrics"]["source_artifact_id"],
+                full["id"],
+            )
+            self.assertEqual(
+                full_stage["metrics"]["source_checksum_sha256"],
+                full["checksum_sha256"],
+            )
+            self.assertEqual(
+                observed_mapping_paths,
+                [str(data_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_1.csv")],
+            )
             enrich.assert_not_called()
+            merge.assert_not_called()
+
+    def test_artifact_mode_fails_safely_without_an_active_full_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_root = root / "data"
+            MappingArtifactRegistry(data_root).initialize()
+            ctx = self.create_context(root, data_root)
+
+            with patch.dict(
+                os.environ,
+                {"MAPPING_ARTIFACT_MODE": "artifact", "PIPELINE_DATA_ROOT": str(data_root)},
+                clear=False,
+            ), patch.object(runtime.lsdp, "create_mapping_publisher_to_publisherids_revenue_multiplier") as merge:
+                result = runtime.run_staging_pipeline(ctx, stage="publisher_revenue_mapping_full")
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["failed_stage"], "publisher_revenue_mapping_full")
+            self.assertIn("No active committed Full Mapping", result["error_summary"])
+            self.assertFalse(
+                (data_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_1.csv").exists()
+            )
             merge.assert_not_called()
 
 

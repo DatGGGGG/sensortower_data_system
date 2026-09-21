@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,6 +55,12 @@ BOTTOM_UP_COLUMNS = (
     "revenue_multiplier",
 )
 FULL_COLUMNS = BOTTOM_UP_COLUMNS
+ARTIFACT_STORAGE_SPECS = {
+    "top_down_raw": ("base", "st_manualsearch_mapping_publisher_to_apps_top_down"),
+    "top_down_with_publisher_ids": ("base", "st_api_mapping_publisher_to_apps_publisherids_top_down"),
+    "bottom_up": ("base", "st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up"),
+    "full": ("staging", "st_mapping_publisher_to_publisherids_revenue_multiplier_full"),
+}
 
 
 class MappingArtifactError(ValueError):
@@ -251,11 +258,12 @@ class MappingArtifactRegistry:
     def __init__(self, data_root: str | Path) -> None:
         self.data_root = Path(data_root).expanduser().resolve()
         self.root = self.data_root / "mapping_artifacts"
-        self.files_root = self.root / "files"
         self.db_path = self.root / "registry.sqlite3"
 
     def initialize(self) -> None:
-        self.files_root.mkdir(parents=True, exist_ok=True)
+        # Keep the legacy location readable for artifacts created by earlier
+        # registry versions; new immutable files use the established base/staging paths.
+        self.root.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.executescript(
                 """
@@ -357,6 +365,12 @@ class MappingArtifactRegistry:
         artifact["source_artifact_checksums"] = _decode_json(artifact.pop("source_artifact_checksums_json"), {})
         artifact["validation"] = _decode_json(artifact.pop("validation_json"), {})
         artifact["bootstrap_import"] = bool(artifact["bootstrap_import"])
+        # Keep the original field names while exposing the workbench contract's
+        # concise aliases during the transition.
+        artifact["type"] = artifact["artifact_type"]
+        artifact["sha256_checksum"] = artifact["checksum_sha256"]
+        artifact["source_workbench_version"] = artifact["source_workbench_version_id"]
+        artifact["validation_summary"] = artifact["validation"]
         return artifact
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
@@ -390,11 +404,17 @@ class MappingArtifactRegistry:
         return [self._row_to_artifact(row) for row in rows]
 
     def _write_immutable_file(self, artifact_type: str, artifact_id: str, content: bytes) -> tuple[str, str]:
-        directory = self.files_root / artifact_type
+        directory_name, filename_prefix = ARTIFACT_STORAGE_SPECS[artifact_type]
+        directory = self.data_root / directory_name
         directory.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        filename = f"{artifact_type}_{timestamp}_{artifact_id}.csv"
+        # Millisecond UTC timestamps preserve the established filename pattern
+        # while preventing concurrent ThreadingHTTPServer requests from colliding.
+        timestamp = int(time.time() * 1000)
+        filename = f"{filename_prefix}_{timestamp}.csv"
         target = directory / filename
+        if target.exists():
+            filename = f"{filename_prefix}_{timestamp}_{artifact_id}.csv"
+            target = directory / filename
         if target.exists():
             raise MappingArtifactError("artifact_exists", f"Artifact file already exists: {filename}", 409)
         file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{artifact_id}.", suffix=".tmp", dir=directory)
@@ -408,7 +428,7 @@ class MappingArtifactRegistry:
         except Exception:
             temporary_path.unlink(missing_ok=True)
             raise
-        return filename, str(target.relative_to(self.data_root))
+        return filename, target.relative_to(self.data_root).as_posix()
 
     def _create_artifact(
         self,
@@ -425,20 +445,47 @@ class MappingArtifactRegistry:
         generator_version: str | None = None,
         repository_git_sha: str | None = None,
         bootstrap_import: bool = False,
+        publish_identity: tuple[str, str, str] | None = None,
     ) -> dict[str, Any]:
         if artifact_type not in ARTIFACT_TYPES:
             raise MappingArtifactError("invalid_artifact_type", f"Unsupported artifact type: {artifact_type}", 422)
         if status not in ARTIFACT_STATUSES:
             raise MappingArtifactError("invalid_artifact_status", f"Unsupported artifact status: {status}", 422)
         validation = validate_csv(artifact_type, content)
+        content_checksum = _sha256(content)
         artifact_id = str(uuid.uuid4())
-        filename, relative_path = self._write_immutable_file(artifact_type, artifact_id, content)
         now = _utc_now()
         committed_at = now if status == "committed" else None
         committed_by = created_by if status == "committed" else None
         try:
             with self._connection() as connection:
+                # SQLite's immediate transaction is the cross-process lock for
+                # registry mutation and immutable filename allocation.
                 connection.execute("BEGIN IMMEDIATE")
+                if publish_identity is not None:
+                    existing_row = connection.execute(
+                        """
+                        SELECT * FROM artifacts
+                        WHERE artifact_type = ?
+                          AND source_workbench_workflow = ?
+                          AND source_workbench_version_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        publish_identity,
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing = self._row_to_artifact(existing_row)
+                        connection.execute("ROLLBACK")
+                        if existing["checksum_sha256"] != content_checksum:
+                            raise MappingArtifactError(
+                                "version_conflict",
+                                "This saved workbench version was already published with different CSV bytes.",
+                                409,
+                            )
+                        self.read_artifact(existing["id"])
+                        return existing
+                filename, relative_path = self._write_immutable_file(artifact_type, artifact_id, content)
                 connection.execute(
                     """
                     INSERT INTO artifacts (
@@ -456,7 +503,7 @@ class MappingArtifactRegistry:
                         filename,
                         relative_path,
                         validation["row_count"],
-                        _sha256(content),
+                        content_checksum,
                         now,
                         _clean(created_by) or "unknown",
                         committed_at,
@@ -530,6 +577,7 @@ class MappingArtifactRegistry:
             source_workbench_version_id=version_id,
             source_workbench_version_label=version_label,
             repository_git_sha=repository_git_sha,
+            publish_identity=(artifact_type, workflow, version_id),
         )
 
     def read_artifact(self, artifact_id: str) -> ArtifactFile:
@@ -701,16 +749,28 @@ class MappingArtifactRegistry:
             temporary_path.unlink(missing_ok=True)
             raise
 
-    def materialize_active_full(self, destination: str | Path) -> dict[str, Any]:
+    def materialize_active_full(
+        self,
+        destination: str | Path,
+        *,
+        current_destination: str | Path | None = None,
+    ) -> dict[str, Any]:
         full = self._active_full()
-        self._materialize(full.content, Path(destination))
-        return {
+        destination_path = Path(destination)
+        self._materialize(full.content, destination_path)
+        if current_destination is not None:
+            self._materialize(full.content, Path(current_destination))
+        metrics = {
             "source_artifact_id": full.artifact["id"],
             "source_checksum_sha256": full.artifact["checksum_sha256"],
             "source_artifact_type": "full",
             "row_count": full.artifact["row_count"],
             "file_size_bytes": len(full.content),
+            "run_scoped_output_path": str(destination_path.resolve()),
         }
+        if current_destination is not None:
+            metrics["current_output_path"] = str(Path(current_destination).resolve())
+        return metrics
 
     def materialize_active_enriched_top_down(self, destination: str | Path) -> dict[str, Any]:
         full = self._active_full()

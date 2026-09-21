@@ -28,7 +28,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/game-full-info-adjusted",
+        "url": "http://172.17.0.1:8010/base-staging/game-full-info-adjusted",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$json.configPath}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"game_info_adjustment\": \"{{$json.gameInfoAdjustment}}\"\n}",
@@ -91,7 +91,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/publisher-mapping-top-down",
+        "url": "http://172.17.0.1:8010/base-staging/publisher-mapping-top-down",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$json.configPath}}\",\n  \"output_root\": \"{{$json.outputRoot}}\",\n  \"run_id\": \"{{$json.runId}}\",\n  \"run_timestamp\": {{$json.runTimestamp}},\n  \"trigger_mode\": \"{{$json.triggerMode}}\",\n  \"mapping_publisher_to_apps_top_down\": \"{{$json.mappingPublisherToAppsTopDown}}\"\n}",
@@ -154,7 +154,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/publisher-revenue-mapping-full",
+        "url": "http://172.17.0.1:8010/base-staging/publisher-revenue-mapping-full",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\",\n  \"mapping_publisher_to_publisherids_revenue_multiplier_bottom_up\": \"{{$('Initialize Staging Run Context').first().json.mappingPublisherToPublisheridsRevenueMultiplierBottomUp}}\"\n}",
@@ -217,7 +217,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/app-full-info-adjusted",
+        "url": "http://172.17.0.1:8010/base-staging/app-full-info-adjusted",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\",\n  \"mapping_app_to_revenue_multiplier_special_cases\": \"{{$('Initialize Staging Run Context').first().json.mappingAppToRevenueMultiplierSpecialCases}}\"\n}",
@@ -280,7 +280,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/app-performance-daily-revenue-adjusted",
+        "url": "http://172.17.0.1:8010/base-staging/app-performance-daily-revenue-adjusted",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\"\n}",
@@ -343,7 +343,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8010/base-staging/app-active-users-current-ndjson",
+        "url": "http://172.17.0.1:8010/base-staging/app-active-users-current-ndjson",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"config_path\": \"{{$('Initialize Staging Run Context').first().json.configPath}}\",\n  \"output_root\": \"{{$('Initialize Staging Run Context').first().json.outputRoot}}\",\n  \"run_id\": \"{{$('Initialize Staging Run Context').first().json.runId}}\",\n  \"run_timestamp\": {{$('Initialize Staging Run Context').first().json.runTimestamp}},\n  \"trigger_mode\": \"{{$('Initialize Staging Run Context').first().json.triggerMode}}\"\n}",
