@@ -139,6 +139,74 @@ class MappingArtifactRegistryTests(unittest.TestCase):
         self.assertEqual(metrics["source_artifact_id"], committed["id"])
         self.assertEqual(metrics["run_scoped_output_path"], str(destination.resolve()))
 
+    def test_activation_can_switch_to_an_older_committed_full_without_mutating_versions(self) -> None:
+        raw = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
+        enriched = self.registry.bootstrap_import(
+            artifact_type="top_down_with_publisher_ids",
+            content=TOP_DOWN_ENRICHED,
+            created_by="bootstrap",
+            source_artifact_ids=[raw["id"]],
+            source_artifact_checksums={raw["id"]: raw["checksum_sha256"]},
+        )
+        first_bottom_up = self.publish("bottom_up", BOTTOM_UP, "version-2")
+        second_bottom_up_content = BOTTOM_UP.replace(b",3\n", b",4\n")
+        second_bottom_up = self.publish("bottom_up", second_bottom_up_content, "version-3")
+
+        def generate(bottom_up: dict, content: bytes) -> dict:
+            draft = self.registry.generate_full(
+                top_down_artifact_id=enriched["id"],
+                bottom_up_artifact_id=bottom_up["id"],
+                created_by="tester",
+                generator_version="test",
+                repository_git_sha="test",
+                merge=Mock(return_value=__import__("pandas").read_csv(__import__("io").BytesIO(content))),
+            )
+            return self.registry.commit(draft["id"], "reviewer")
+
+        first_full = generate(first_bottom_up, BOTTOM_UP)
+        second_full = generate(second_bottom_up, second_bottom_up_content)
+        first_bytes = self.registry.read_artifact(first_full["id"]).content
+        second_bytes = self.registry.read_artifact(second_full["id"]).content
+
+        self.assertEqual(self.registry.activate(first_full["id"], "admin-a")["full"]["artifact"]["id"], first_full["id"])
+        self.assertEqual(self.registry.activate(second_full["id"], "admin-b")["full"]["artifact"]["id"], second_full["id"])
+        rollback = self.registry.activate(first_full["id"], "admin-c")
+
+        self.assertEqual(rollback["full"]["artifact"]["id"], first_full["id"])
+        self.assertEqual(rollback["full"]["activated_by"], "admin-c")
+        self.assertEqual(self.registry.read_artifact(first_full["id"]).content, first_bytes)
+        self.assertEqual(self.registry.read_artifact(second_full["id"]).content, second_bytes)
+
+    def test_activation_rejects_drafts_non_full_artifacts_and_corrupt_lineage(self) -> None:
+        raw = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
+        enriched = self.registry.bootstrap_import(
+            artifact_type="top_down_with_publisher_ids",
+            content=TOP_DOWN_ENRICHED,
+            created_by="bootstrap",
+            source_artifact_ids=[raw["id"]],
+            source_artifact_checksums={raw["id"]: raw["checksum_sha256"]},
+        )
+        bottom_up = self.publish("bottom_up", BOTTOM_UP, "version-2")
+        draft = self.registry.generate_full(
+            top_down_artifact_id=enriched["id"],
+            bottom_up_artifact_id=bottom_up["id"],
+            created_by="tester",
+            generator_version="test",
+            repository_git_sha="test",
+            merge=Mock(return_value=__import__("pandas").read_csv(__import__("io").BytesIO(FULL))),
+        )
+
+        with self.assertRaisesRegex(MappingArtifactError, "Artifact must be committed"):
+            self.registry.activate(draft["id"], "admin")
+        with self.assertRaisesRegex(MappingArtifactError, "Expected full"):
+            self.registry.activate(bottom_up["id"], "admin")
+
+        committed = self.registry.commit(draft["id"], "reviewer")
+        source_path = self.root / enriched["relative_path"]
+        source_path.write_bytes(b"tampered")
+        with self.assertRaisesRegex(MappingArtifactError, "checksum verification failed"):
+            self.registry.activate(committed["id"], "admin")
+
     def test_full_draft_with_blank_required_values_cannot_be_committed(self) -> None:
         raw = self.publish("top_down_raw", TOP_DOWN_RAW, "version-1")
         enriched = self.registry.bootstrap_import(
