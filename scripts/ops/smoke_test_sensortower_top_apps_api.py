@@ -189,15 +189,15 @@ def main() -> int:
     parser.add_argument("--unified-app-primary-categories", default=None)
     parser.add_argument(
         "--worldwide-mode",
-        default="regions",
+        default="omit_regions",
         choices=["regions", "omit_regions"],
-        help="Use regions=WW by default. For WW/WORLD/GLOBAL, omit regions when set to omit_regions.",
+        help="Omit regions for WW/WORLD/GLOBAL by default; regions=WW is rejected by the API.",
     )
     parser.add_argument(
         "--top-apps-mobile-style",
-        default="empty_value",
+        default="url_flag",
         choices=["empty_value", "url_flag", "true_value"],
-        help="How to encode the top_apps_mobile flag. url_flag matches /metrics?top_apps_mobile.",
+        help="How to encode the top_apps_mobile marker. url_flag matches the documented route.",
     )
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--fail-on-empty", action="store_true")

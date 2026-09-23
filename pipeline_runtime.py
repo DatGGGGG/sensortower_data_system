@@ -81,7 +81,6 @@ SNAPSHOT_STAGE_START_YEAR = 2014
 SNAPSHOT_STAGE_PAGE_SIZE = 2000
 SNAPSHOT_STAGE_TOP_K = 10000
 SNAPSHOT_STAGE_MAX_CANDIDATE_COUNT = 100000
-SNAPSHOT_STAGE_MAX_OFFSET = 10000
 DAILY_OVERLAP_DAYS = 3
 WEEKLY_OVERLAP_DAYS = 14
 QUARTERLY_OVERLAP_DAYS = 365
@@ -1355,6 +1354,53 @@ def _extract_unified_publisher_name(app_obj: dict[str, Any], fallback: str = "")
     return fallback
 
 
+def _top_apps_snapshot_request_params(
+    api_key: str,
+    settings: dict[str, Any],
+    *,
+    year: int,
+    offset: int,
+) -> dict[str, Any]:
+    """Translate snapshot settings to the replacement Top Apps Facets request."""
+    limit = int(settings["limit"])
+    if not 1 <= limit <= 2000:
+        raise ValueError(f"TOP_GAME_SNAPSHOT_LIMIT must be between 1 and 2000; got {limit}")
+
+    measure = str(settings.get("measure") or "revenue").strip().lower()
+    order_by_by_measure = {
+        "revenue": "est_mobile_revenue:desc",
+        "units": "est_mobile_downloads:desc",
+    }
+    if measure not in order_by_by_measure:
+        raise ValueError(f"Unsupported TOP_GAME_SNAPSHOT_MEASURE for Top Apps API: {measure}")
+    if str(settings.get("comparison_attribute") or "absolute").strip().lower() != "absolute":
+        raise ValueError("Top Apps API only supports TOP_GAME_SNAPSHOT_COMPARISON_ATTRIBUTE=absolute")
+    if str(settings.get("time_range") or "year").strip().lower() != "year":
+        raise ValueError("Top-game snapshot migration currently supports TOP_GAME_SNAPSHOT_TIME_RANGE=year only")
+    if str(settings.get("os") or "unified").strip().lower() != "unified":
+        raise ValueError("Top-game snapshot output requires TOP_GAME_SNAPSHOT_OS=unified")
+
+    params: dict[str, Any] = {
+        "bundle": "mobile_store_top_apps",
+        "order_by": order_by_by_measure[measure],
+        "breakdown": "unified_app_id",
+        "devices": "iphone,ipad,android",
+        "entities": "unified_app_id:name",
+        "start_date": f"{year}-01-01",
+        "end_date": f"{year}-12-31",
+        "limit": limit,
+        "offset": offset,
+        "auth_token": api_key,
+    }
+    regions = str(settings.get("regions") or "").strip().upper()
+    if regions and regions not in {"WW", "WORLD", "GLOBAL"}:
+        params["regions"] = regions
+    custom_fields_filter_id = str(settings.get("custom_fields_filter_id") or "").strip()
+    if custom_fields_filter_id:
+        params["custom_fields_filter_id"] = custom_fields_filter_id
+    return params
+
+
 def _fetch_top_game_snapshot_api_rows(
     api_key: str,
     ctx: PipelineContext,
@@ -1369,13 +1415,12 @@ def _fetch_top_game_snapshot_api_rows(
     request_count = 0
     year_counts: dict[str, int] = {}
     year_stop_reasons: dict[str, str] = {}
+    year_total_counts: dict[str, Optional[int]] = {}
     raw_response_samples: list[dict[str, Any]] = []
-    endpoint = f"{ctx.base_url}/v1/{settings['os']}/sales_report_estimates_comparison_attributes"
+    # `top_apps_mobile` is a route marker, not a normal query parameter.
+    endpoint = f"{ctx.base_url.rstrip('/')}/v1/facets/metrics?top_apps_mobile"
     total_years = settings["end_year"] - settings["start_year"] + 1
-    effective_max_candidate_count = min(
-        settings["max_candidate_count"],
-        SNAPSHOT_STAGE_MAX_OFFSET + settings["limit"],
-    )
+    effective_max_candidate_count = settings["max_candidate_count"]
     candidate_offsets = list(range(0, effective_max_candidate_count, settings["limit"]))
     max_pages_per_year = max(1, len(candidate_offsets))
 
@@ -1456,14 +1501,6 @@ def _fetch_top_game_snapshot_api_rows(
         f"for years {settings['start_year']}..{settings['end_year']} "
         f"at up to {max_pages_per_year} page(s) per year"
     )
-    if effective_max_candidate_count < settings["max_candidate_count"]:
-        _snapshot_log(
-            "Snapshot candidate scan capped by SensorTower offset limit: "
-            f"requested max_candidate_count={settings['max_candidate_count']}, "
-            f"effective_max_candidate_count={effective_max_candidate_count}, "
-            f"max_offset={SNAPSHOT_STAGE_MAX_OFFSET}"
-        )
-
     for year_index, year in enumerate(range(settings["start_year"], settings["end_year"] + 1), start=1):
         year_rows: list[dict[str, Any]] = []
         seen_year_keys: set[tuple[str, str]] = set()
@@ -1471,21 +1508,7 @@ def _fetch_top_game_snapshot_api_rows(
         stop_reason = "api_exhausted"
         _snapshot_log(f"Year {year} started ({year_index}/{total_years})")
         for page_index, offset in enumerate(candidate_offsets, start=1):
-            params = {
-                "comparison_attribute": settings["comparison_attribute"],
-                "time_range": settings["time_range"],
-                "measure": settings["measure"],
-                "device_type": settings["device_type"],
-                "category": settings["category"],
-                "date": f"{year}-01-01",
-                "regions": settings["regions"],
-                "limit": settings["limit"],
-                "offset": offset,
-                "custom_fields_filter_id": settings["custom_fields_filter_id"],
-                "custom_tags_mode": settings["custom_tags_mode"],
-                "data_model": settings["data_model"],
-                "auth_token": api_key,
-            }
+            params = _top_apps_snapshot_request_params(api_key, settings, year=year, offset=offset)
             _snapshot_log(
                 f"Requesting year={year}, page={page_index}/{max_pages_per_year}, "
                 f"offset={offset}, limit={settings['limit']}"
@@ -1509,9 +1532,18 @@ def _fetch_top_game_snapshot_api_rows(
                     f"status={response.status_code}, body={response.text[:500]}"
                 )
             payload = response.json()
-            data = payload.get("data", []) if isinstance(payload, dict) else payload
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"Unexpected Top Apps response format: {type(payload)}")
+            data = payload.get("data", [])
             if not isinstance(data, list):
                 raise RuntimeError(f"Unexpected top game snapshot response format: {type(data)}")
+            meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+            total_count_value = meta.get("total_count")
+            try:
+                total_count = int(total_count_value) if total_count_value is not None else None
+            except (TypeError, ValueError):
+                total_count = None
+            year_total_counts[str(year)] = total_count
             _snapshot_log(
                 f"Received year={year}, page={page_index}/{max_pages_per_year}, rows={len(data)}, "
                 f"status={response.status_code}, elapsed={request_elapsed_seconds:.1f}s"
@@ -1523,7 +1555,7 @@ def _fetch_top_game_snapshot_api_rows(
             for row in data:
                 normalized_row = dict(row)
                 normalized_row["_snapshot_year"] = str(year)
-                normalized_row["_normalized_unified_id"] = _normalize_id(row.get("app_id"))
+                normalized_row["_normalized_unified_id"] = _normalize_id(row.get("unified_app_id"))
                 candidate_rows.append(normalized_row)
                 candidate_row_count += 1
                 year_candidate_count += 1
@@ -1585,11 +1617,10 @@ def _fetch_top_game_snapshot_api_rows(
             if len(year_rows) >= settings["target_count"]:
                 break
             if year_candidate_count >= effective_max_candidate_count:
-                stop_reason = (
-                    "api_offset_cap_reached"
-                    if effective_max_candidate_count < settings["max_candidate_count"]
-                    else "max_candidate_count_reached"
-                )
+                stop_reason = "max_candidate_count_reached"
+                break
+            if total_count is not None and offset + len(data) >= total_count:
+                stop_reason = "api_exhausted"
                 break
             if len(data) < settings["limit"]:
                 _snapshot_log(
@@ -1611,6 +1642,7 @@ def _fetch_top_game_snapshot_api_rows(
         "requests_per_year": settings["target_count"] // settings["limit"],
         "year_row_counts": year_counts,
         "year_stop_reasons": year_stop_reasons,
+        "year_total_counts": year_total_counts,
         "candidate_row_count": candidate_row_count,
         "kept_row_count": len(rows),
         "dropped_row_count": max(0, candidate_row_count - len(rows)),
@@ -1637,10 +1669,12 @@ def _fetch_top_game_snapshot_api_rows(
 def _build_snapshot_id_frame(raw_rows: list[dict[str, Any]]) -> pd.DataFrame:
     normalized_rows: list[dict[str, Any]] = []
     for row_index, row in enumerate(raw_rows):
-        unified_id = _normalize_id(row.get("app_id"))
+        unified_id = _normalize_id(row.get("unified_app_id") or row.get("app_id"))
         if not unified_id:
             continue
-        revenue_value = row.get("revenue_absolute")
+        revenue_value = row.get("est_mobile_revenue")
+        if revenue_value in (None, ""):
+            revenue_value = row.get("revenue_absolute")
         revenue = None
         if revenue_value not in (None, ""):
             revenue = float(revenue_value) / 100.0
