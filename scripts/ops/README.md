@@ -243,3 +243,24 @@ Quarterly can still be run manually any time:
 ```bash
 bash scripts/ops/run_quarterly_pipeline.sh
 ```
+
+## Artifact-mode mapping pinning
+
+With `MAPPING_ARTIFACT_MODE=artifact`, every daily, weekly, and quarterly run
+validates the active committed Full Mapping and its complete lineage before any
+SensorTower extraction starts. The selected bundle is pinned in:
+
+```text
+data/logs/<run_id>/mapping_artifact_manifest.json
+```
+
+Every staging subprocess and direct API retry for that run reuses the pinned
+artifact IDs, even if an administrator activates another Full Mapping while the
+run is in progress. Reusing a run ID with a different timestamp is rejected.
+There is intentionally no automatic reset: start a new run ID to adopt a newly
+activated mapping. Do not delete or edit a production run manifest after source
+extraction has started.
+
+The manifest fingerprint covers the Full Mapping and enriched Top Down artifact
+only. The legacy Special Cases CSV is still applied afterward and is not part of
+the fingerprint until the separate Special Cases artifact phase is implemented.

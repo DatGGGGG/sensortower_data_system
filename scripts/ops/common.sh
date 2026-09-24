@@ -345,3 +345,16 @@ ops_require_manual_inputs() {
     ops_require_file "$MAPPING_PUBLISHER_BOTTOM_UP_PATH" "publisher bottom-up mapping"
   fi
 }
+
+ops_prepare_mapping_artifact_manifest() {
+  if [[ "${MAPPING_ARTIFACT_MODE:-legacy}" != "artifact" ]]; then
+    return 0
+  fi
+  local manifest_path="${MAPPING_ARTIFACT_MANIFEST_PATH:-${OUTPUT_ROOT}/logs/${RUN_ID}/mapping_artifact_manifest.json}"
+  ops_run "$(ops_python)" "${ROOT_DIR}/scripts/prepare_mapping_artifact_manifest.py" \
+    --output-root "$OUTPUT_ROOT" \
+    --run-id "$RUN_ID" \
+    --run-timestamp "$RUN_TIMESTAMP" \
+    --manifest-path "$manifest_path"
+  export MAPPING_ARTIFACT_MANIFEST_PATH="$manifest_path"
+}

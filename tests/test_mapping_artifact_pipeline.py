@@ -98,6 +98,35 @@ class MappingArtifactPipelineTests(unittest.TestCase):
                 runtime.lsdp, "create_mapping_publisher_to_publisherids_revenue_multiplier"
             ) as merge, patch.object(runtime.lsdp, "adjust_ndjson_app_full_info", side_effect=adjust_app_info):
                 first = runtime.run_staging_pipeline(ctx, stage="publisher_mapping_top_down")
+                raw_b_content = TOP_DOWN_RAW.replace(b"Publisher A", b"Publisher B").replace(b"Game A", b"Game B")
+                enriched_b_content = TOP_DOWN_ENRICHED.replace(b"Publisher A", b"Publisher B").replace(
+                    b"Game A", b"Game B"
+                )
+                bottom_b_content = BOTTOM_UP.replace(b"Publisher A", b"Publisher B").replace(b",3\n", b",4\n")
+                raw_b = registry.bootstrap_import(
+                    artifact_type="top_down_raw", content=raw_b_content, created_by="test"
+                )
+                enriched_b = registry.bootstrap_import(
+                    artifact_type="top_down_with_publisher_ids",
+                    content=enriched_b_content,
+                    created_by="test",
+                    source_artifact_ids=[raw_b["id"]],
+                    source_artifact_checksums={raw_b["id"]: raw_b["checksum_sha256"]},
+                )
+                bottom_b = registry.bootstrap_import(
+                    artifact_type="bottom_up", content=bottom_b_content, created_by="test"
+                )
+                full_b = registry.bootstrap_import(
+                    artifact_type="full",
+                    content=bottom_b_content,
+                    created_by="test",
+                    source_artifact_ids=[enriched_b["id"], bottom_b["id"]],
+                    source_artifact_checksums={
+                        enriched_b["id"]: enriched_b["checksum_sha256"],
+                        bottom_b["id"]: bottom_b["checksum_sha256"],
+                    },
+                )
+                registry.activate(full_b["id"], "test")
                 second = runtime.run_staging_pipeline(ctx, stage="publisher_revenue_mapping_full")
                 third = runtime.run_staging_pipeline(ctx, stage="app_full_info_adjusted_ndjson")
 
@@ -128,6 +157,16 @@ class MappingArtifactPipelineTests(unittest.TestCase):
             self.assertEqual(
                 observed_mapping_paths,
                 [str(data_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_1.csv")],
+            )
+            manifest_path = data_root / "logs" / "artifact-test" / "mapping_artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["full_mapping"]["artifact_id"], full["id"])
+            self.assertEqual(
+                third["stage_results"][0]["metrics"]["mapping_artifact_fingerprint"],
+                manifest["mapping_artifact_fingerprint"],
+            )
+            self.assertTrue(
+                (data_root / "staging" / "st_app_full_info_adjusted_current.ndjson.provenance.json").exists()
             )
             enrich.assert_not_called()
             merge.assert_not_called()

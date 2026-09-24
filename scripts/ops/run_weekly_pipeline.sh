@@ -43,6 +43,7 @@ ops_environment_snapshot
 
 ops_require_file "$CONFIG_PATH" "config"
 ops_require_manual_inputs
+ops_prepare_mapping_artifact_manifest
 
 SOURCE_BASE_STAGES="${SOURCE_BASE_STAGES:-fetch_top_game_snapshot update_top_game_history materialize_game_list build_game_full_info materialize_app_list build_app_full_info build_app_performance build_app_active_users build_app_retention build_user_demographics}"
 if [[ "${RUN_USER_REVIEWS:-0}" == "1" ]]; then

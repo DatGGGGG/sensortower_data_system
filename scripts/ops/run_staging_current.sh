@@ -12,6 +12,7 @@ ops_common_defaults
 ops_activate_venv
 ops_environment_snapshot
 ops_require_manual_inputs
+ops_prepare_mapping_artifact_manifest
 
 STAGING_STAGES="${STAGING_STAGES:-publisher_mapping_top_down publisher_revenue_mapping_full app_full_info_adjusted_ndjson app_performance_daily_revenue_adjusted app_active_users_current_ndjson game_full_info_adjusted}"
 
@@ -27,6 +28,7 @@ for stage_name in $STAGING_STAGES; do
     --mapping-publisher-to-apps-top-down "$MAPPING_PUBLISHER_TO_APPS_TOP_DOWN_PATH" \
     --mapping-publisher-to-publisherids-revenue-multiplier-bottom-up "$MAPPING_PUBLISHER_BOTTOM_UP_PATH" \
     --mapping-app-to-revenue-multiplier-special-cases "$MAPPING_APP_SPECIAL_CASES_PATH" \
+    --mapping-artifact-manifest "${MAPPING_ARTIFACT_MANIFEST_PATH:-}" \
     --stage "$stage_name"
 done
 

@@ -212,6 +212,7 @@ def _build_context(payload: dict[str, Any]) -> Any:
         game_list_source=payload.get("game_list_source"),
         force_history_rebuild_from_seed=payload.get("force_history_rebuild_from_seed"),
         force_fail_stage=payload.get("force_fail_stage"),
+        mapping_artifact_manifest=payload.get("mapping_artifact_manifest"),
         mapping_publisher_to_apps_top_down=payload.get("mapping_publisher_to_apps_top_down"),
         mapping_publisher_to_publisherids_revenue_multiplier_bottom_up=payload.get(
             "mapping_publisher_to_publisherids_revenue_multiplier_bottom_up"

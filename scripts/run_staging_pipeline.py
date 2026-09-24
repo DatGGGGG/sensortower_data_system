@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mapping-app-to-revenue-multiplier-special-cases", default=None)
     parser.add_argument("--game-info-adjustment", default=None)
     parser.add_argument("--force-fail-stage", default=None)
+    parser.add_argument("--mapping-artifact-manifest", default=None)
     parser.add_argument("--stage", choices=["all", *STAGING_STAGE_ORDER], default="all")
     return parser.parse_args()
 

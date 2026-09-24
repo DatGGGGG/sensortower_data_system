@@ -24,6 +24,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from mapping_artifact_manifest import default_manifest_path, ensure_mapping_artifact_manifest
 from mapping_artifacts import MappingArtifactRegistry
 
 LIB_DIR = Path(__file__).resolve().parent / "lib"
@@ -153,6 +154,7 @@ class PipelineContext:
     game_list_source: Optional[str]
     force_history_rebuild_from_seed: bool
     force_fail_stage: Optional[str]
+    mapping_artifact_manifest_path: Optional[Path]
     mapping_publisher_to_apps_top_down_override: Optional[Path]
     mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_override: Optional[Path]
     mapping_app_to_revenue_multiplier_special_cases_override: Optional[Path]
@@ -186,6 +188,28 @@ def _mapping_artifact_registry(ctx: PipelineContext) -> MappingArtifactRegistry:
             "Artifact-mode staging requires output_root to match PIPELINE_DATA_ROOT."
         )
     return registry
+
+
+def _mapping_artifact_manifest(ctx: PipelineContext) -> tuple[Path, dict[str, Any]]:
+    return ensure_mapping_artifact_manifest(
+        _mapping_artifact_registry(ctx),
+        output_root=ctx.output_root,
+        run_id=ctx.run_id,
+        run_timestamp=ctx.run_timestamp,
+        manifest_path=ctx.mapping_artifact_manifest_path,
+    )
+
+
+def _mapping_manifest_metrics(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mapping_artifact_mode": "artifact",
+        "mapping_artifact_manifest_path": str(path.resolve()),
+        "mapping_artifact_fingerprint": manifest["mapping_artifact_fingerprint"],
+        "pinned_full_artifact_id": manifest["full_mapping"]["artifact_id"],
+        "pinned_full_checksum_sha256": manifest["full_mapping"]["checksum_sha256"],
+        "pinned_top_down_artifact_id": manifest["enriched_top_down"]["artifact_id"],
+        "pinned_top_down_checksum_sha256": manifest["enriched_top_down"]["checksum_sha256"],
+    }
 
 
 def _coerce_runtime_path(raw_value: Any, *, repo_root: Optional[Path] = None) -> Path:
@@ -488,7 +512,21 @@ def create_context(args: argparse.Namespace) -> PipelineContext:
         input_root = _coerce_runtime_path(args.input_root, repo_root=repo_root)
 
     run_id = getattr(args, "run_id", None) or datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%SZ")
-    run_timestamp = int(getattr(args, "run_timestamp", None) or int(time.time()))
+    requested_run_timestamp = getattr(args, "run_timestamp", None)
+    if requested_run_timestamp in (None, ""):
+        requested_manifest = getattr(args, "mapping_artifact_manifest", None)
+        candidate_manifest = (
+            _coerce_runtime_path(requested_manifest, repo_root=repo_root)
+            if requested_manifest not in (None, "")
+            else default_manifest_path(output_root, run_id)
+        )
+        if candidate_manifest.exists():
+            try:
+                with open(candidate_manifest, "r", encoding="utf-8") as handle:
+                    requested_run_timestamp = json.load(handle).get("run_timestamp")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                requested_run_timestamp = None
+    run_timestamp = int(requested_run_timestamp or int(time.time()))
     trigger_mode = getattr(args, "trigger_mode", None) or "manual"
     performance_end_date = getattr(args, "performance_end_date", None) or (date.today() - timedelta(days=3)).isoformat()
     facts_load_mode = getattr(args, "facts_load_mode", None) or DEFAULT_FACTS_LOAD_MODE
@@ -505,6 +543,7 @@ def create_context(args: argparse.Namespace) -> PipelineContext:
     game_list_source = getattr(args, "game_list_source", None)
     force_history_rebuild_from_seed = _coerce_bool(getattr(args, "force_history_rebuild_from_seed", None))
     force_fail_stage = getattr(args, "force_fail_stage", None)
+    mapping_artifact_manifest_path = getattr(args, "mapping_artifact_manifest", None)
     mapping_publisher_to_apps_top_down_override = getattr(args, "mapping_publisher_to_apps_top_down", None)
     mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_override = getattr(
         args,
@@ -544,6 +583,9 @@ def create_context(args: argparse.Namespace) -> PipelineContext:
         game_list_source=game_list_source,
         force_history_rebuild_from_seed=force_history_rebuild_from_seed,
         force_fail_stage=force_fail_stage,
+        mapping_artifact_manifest_path=_resolve_override_path(repo_root, mapping_artifact_manifest_path)
+        if mapping_artifact_manifest_path not in (None, "")
+        else None,
         mapping_publisher_to_apps_top_down_override=_resolve_override_path(repo_root, mapping_publisher_to_apps_top_down_override)
         if mapping_publisher_to_apps_top_down_override not in (None, "")
         else None,
@@ -862,6 +904,8 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
     staging_outputs = _staging_current_outputs(ctx.output_root)
     run_scoped_staging_outputs = _staging_outputs(ctx.output_root, ctx.run_timestamp)
     mapping_artifact_mode = _mapping_artifact_mode()
+    mapping_manifest_path: Optional[Path] = None
+    mapping_manifest: Optional[dict[str, Any]] = None
     stage_order = STAGING_STAGE_ORDER if stage == "all" else [stage]
     full_mapping_path = (
         run_scoped_staging_outputs["publisher_revenue_mapping_full"]
@@ -877,6 +921,10 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
     stage_name = stage_order[0] if stage_order else "unknown"
 
     try:
+        if mapping_artifact_mode == "artifact":
+            mapping_manifest_path, mapping_manifest = _mapping_artifact_manifest(ctx)
+            summary["mapping_artifact_manifest"] = str(mapping_manifest_path.resolve())
+            summary["mapping_artifact_fingerprint"] = mapping_manifest["mapping_artifact_fingerprint"]
         # Artifact mode materializes reviewed bytes and intentionally does not
         # call SensorTower again for publisher enrichment during scheduled ETL.
         if mapping_artifact_mode == "legacy" and "publisher_mapping_top_down" in stage_order:
@@ -885,10 +933,11 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
             if stage_name == "publisher_mapping_top_down":
                 def _run() -> dict[str, Any]:
                     if mapping_artifact_mode == "artifact":
-                        metrics = _mapping_artifact_registry(ctx).materialize_active_enriched_top_down(
+                        metrics = _mapping_artifact_registry(ctx).materialize_enriched_top_down(
+                            mapping_manifest["full_mapping"]["artifact_id"],
                             state_outputs["publisher_mapping_top_down_current"]
                         )
-                        metrics["mapping_artifact_mode"] = mapping_artifact_mode
+                        metrics.update(_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest))
                         return metrics
                     api_key = _read_api_key(ctx.repo_root)
                     df_mapping = lsdp.create_mapping_publisher_to_apps_publisherids(
@@ -903,7 +952,7 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                     }
 
                 current_input_files = (
-                    {"active_full_mapping": "mapping_artifacts://active/full"}
+                    {"pinned_full_mapping": f"mapping_artifacts://full/{mapping_manifest['full_mapping']['artifact_id']}"}
                     if mapping_artifact_mode == "artifact"
                     else {"mapping_publisher_to_apps_top_down": resolved_inputs["mapping_publisher_to_apps_top_down"]}
                 )
@@ -921,11 +970,12 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
             elif stage_name == "publisher_revenue_mapping_full":
                 def _run() -> dict[str, Any]:
                     if mapping_artifact_mode == "artifact":
-                        metrics = _mapping_artifact_registry(ctx).materialize_active_full(
+                        metrics = _mapping_artifact_registry(ctx).materialize_full(
+                            mapping_manifest["full_mapping"]["artifact_id"],
                             full_mapping_path,
                             current_destination=staging_outputs["publisher_revenue_mapping_full"],
                         )
-                        metrics["mapping_artifact_mode"] = mapping_artifact_mode
+                        metrics.update(_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest))
                         return metrics
                     top_down_types = {
                         "os_x": "string",
@@ -958,7 +1008,7 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                     }
 
                 current_input_files = (
-                    {"active_full_mapping": "mapping_artifacts://active/full"}
+                    {"pinned_full_mapping": f"mapping_artifacts://full/{mapping_manifest['full_mapping']['artifact_id']}"}
                     if mapping_artifact_mode == "artifact"
                     else {
                         "publisher_mapping_top_down_current": str(state_outputs["publisher_mapping_top_down_current"]),
@@ -980,9 +1030,9 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
             elif stage_name == "app_full_info_adjusted_ndjson":
                 def _run() -> dict[str, Any]:
                     if mapping_artifact_mode == "artifact":
-                        # A direct retry of this downstream stage must still use
-                        # the current active Full Mapping for its run timestamp.
-                        _mapping_artifact_registry(ctx).materialize_active_full(
+                        # A direct retry reuses this run's immutable manifest.
+                        materialize_metrics = _mapping_artifact_registry(ctx).materialize_full(
+                            mapping_manifest["full_mapping"]["artifact_id"],
                             full_mapping_path,
                             current_destination=staging_outputs["publisher_revenue_mapping_full"],
                         )
@@ -992,11 +1042,28 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                         publisher_mapping_csv_path=str(full_mapping_path),
                         special_case_csv_path=resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
                     )
-                    return {
+                    metrics = {
                         "row_count": int(stats["records_written"]),
                         "skipped_duplicates": int(stats["skipped_duplicates"]),
                         "file_size_bytes": _file_size(staging_outputs["app_full_info_adjusted_ndjson"]),
                     }
+                    if mapping_artifact_mode == "artifact":
+                        provenance_path = staging_outputs["app_full_info_adjusted_ndjson"].with_suffix(
+                            staging_outputs["app_full_info_adjusted_ndjson"].suffix + ".provenance.json"
+                        )
+                        provenance = {
+                            "schema_version": 1,
+                            "run_id": ctx.run_id,
+                            "run_timestamp": ctx.run_timestamp,
+                            **_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest),
+                            "special_cases_path": resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
+                            "scope_note": "Mapping fingerprint excludes mutable Special Cases and is not a final effective-mapping fingerprint.",
+                        }
+                        _write_json_payload_atomic(provenance_path, provenance)
+                        metrics.update(materialize_metrics)
+                        metrics.update(_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest))
+                        metrics["mapping_provenance_path"] = str(provenance_path.resolve())
+                    return metrics
 
                 current_input_files = {
                     "app_full_info_current": str(state_outputs["app_full_info_current"]),
@@ -1006,6 +1073,12 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                 current_output_files = {
                     "app_full_info_adjusted_ndjson": str(staging_outputs["app_full_info_adjusted_ndjson"])
                 }
+                if mapping_artifact_mode == "artifact":
+                    current_output_files["mapping_provenance"] = str(
+                        staging_outputs["app_full_info_adjusted_ndjson"].with_suffix(
+                            staging_outputs["app_full_info_adjusted_ndjson"].suffix + ".provenance.json"
+                        )
+                    )
                 stage_result = _execute_stage(
                     ctx,
                     stage_name,
@@ -1096,6 +1169,10 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
             else:
                 raise ValueError(f"Unsupported staging stage '{stage_name}'.")
 
+            if mapping_artifact_mode == "artifact":
+                stage_result.setdefault("metrics", {}).update(
+                    _mapping_manifest_metrics(mapping_manifest_path, mapping_manifest)
+                )
             summary["stage_results"].append(stage_result)
 
         summary["result_file"] = _write_named_result(ctx, "run_staging_pipeline", summary)

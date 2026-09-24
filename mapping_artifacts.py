@@ -734,6 +734,60 @@ class MappingArtifactRegistry:
             )
         return self._require_committed(active["artifact"]["id"], "full")
 
+    def resolve_full_bundle(self, artifact_id: str | None = None) -> dict[str, dict[str, Any]]:
+        """Validate immutable bytes and complete lineage for one committed Full Mapping."""
+        full = self._active_full() if artifact_id is None else self._require_committed(artifact_id, "full")
+        full_validation = validate_csv("full", full.content)
+        if full_validation["blocking_errors"]:
+            raise MappingArtifactError("validation_failed", "; ".join(full_validation["blocking_errors"]), 409)
+
+        sources: dict[str, ArtifactFile] = {}
+        for source_id in full.artifact["source_artifact_ids"]:
+            source = self._require_committed(source_id)
+            expected_checksum = full.artifact["source_artifact_checksums"].get(source_id)
+            if expected_checksum != source.artifact["checksum_sha256"]:
+                raise MappingArtifactError("artifact_corrupt", "Full Mapping lineage checksum is invalid.", 409)
+            sources[source.artifact["artifact_type"]] = source
+        if len(full.artifact["source_artifact_ids"]) != 2 or set(sources) != {
+            "top_down_with_publisher_ids",
+            "bottom_up",
+        }:
+            raise MappingArtifactError(
+                "artifact_lineage_invalid",
+                "Full Mapping must have exactly one committed enriched Top Down and one committed Bottom Up source.",
+                409,
+            )
+
+        top_down = sources["top_down_with_publisher_ids"]
+        bottom_up = sources["bottom_up"]
+        for source in (top_down, bottom_up):
+            validation = validate_csv(source.artifact["artifact_type"], source.content)
+            if validation["blocking_errors"]:
+                raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409)
+
+        raw_sources: list[ArtifactFile] = []
+        for source_id in top_down.artifact["source_artifact_ids"]:
+            source = self._require_committed(source_id, "top_down_raw")
+            expected_checksum = top_down.artifact["source_artifact_checksums"].get(source_id)
+            if expected_checksum != source.artifact["checksum_sha256"]:
+                raise MappingArtifactError("artifact_corrupt", "Enriched Top Down lineage checksum is invalid.", 409)
+            validation = validate_csv("top_down_raw", source.content)
+            if validation["blocking_errors"]:
+                raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409)
+            raw_sources.append(source)
+        if len(raw_sources) != 1:
+            raise MappingArtifactError(
+                "artifact_lineage_invalid",
+                "Enriched Top Down must have exactly one committed raw Top Down source.",
+                409,
+            )
+        return {
+            "full": full.artifact,
+            "enriched_top_down": top_down.artifact,
+            "bottom_up": bottom_up.artifact,
+            "raw_top_down": raw_sources[0].artifact,
+        }
+
     @staticmethod
     def _materialize(content: bytes, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -756,6 +810,21 @@ class MappingArtifactRegistry:
         current_destination: str | Path | None = None,
     ) -> dict[str, Any]:
         full = self._active_full()
+        return self.materialize_full(
+            full.artifact["id"],
+            destination,
+            current_destination=current_destination,
+        )
+
+    def materialize_full(
+        self,
+        artifact_id: str,
+        destination: str | Path,
+        *,
+        current_destination: str | Path | None = None,
+    ) -> dict[str, Any]:
+        bundle = self.resolve_full_bundle(artifact_id)
+        full = self._require_committed(bundle["full"]["id"], "full")
         destination_path = Path(destination)
         self._materialize(full.content, destination_path)
         if current_destination is not None:
@@ -774,20 +843,11 @@ class MappingArtifactRegistry:
 
     def materialize_active_enriched_top_down(self, destination: str | Path) -> dict[str, Any]:
         full = self._active_full()
-        source_id = next(
-            (
-                candidate_id
-                for candidate_id in full.artifact["source_artifact_ids"]
-                if self.get_artifact(candidate_id)["artifact_type"] == "top_down_with_publisher_ids"
-            ),
-            None,
-        )
-        if source_id is None:
-            raise MappingArtifactError("artifact_lineage_invalid", "Active Full Mapping has no enriched Top Down source.", 409)
-        top_down = self._require_committed(source_id, "top_down_with_publisher_ids")
-        expected_checksum = full.artifact["source_artifact_checksums"].get(source_id)
-        if expected_checksum != top_down.artifact["checksum_sha256"]:
-            raise MappingArtifactError("artifact_corrupt", "Active Full Mapping Top Down lineage checksum is invalid.", 409)
+        return self.materialize_enriched_top_down(full.artifact["id"], destination)
+
+    def materialize_enriched_top_down(self, full_artifact_id: str, destination: str | Path) -> dict[str, Any]:
+        bundle = self.resolve_full_bundle(full_artifact_id)
+        top_down = self._require_committed(bundle["enriched_top_down"]["id"], "top_down_with_publisher_ids")
         self._materialize(top_down.content, Path(destination))
         return {
             "source_artifact_id": top_down.artifact["id"],
