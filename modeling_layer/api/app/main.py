@@ -5,7 +5,8 @@ import time
 from typing import Any
 
 import psycopg
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -28,6 +29,16 @@ from .db import (
     validate_read_only_query,
 )
 from .query_guard import QueryValidationError, validate_read_only_sql
+from .openapi_models import (
+    AppDetailResponse,
+    AppListResponse,
+    AppPerformanceResponse,
+    CatalogResponse,
+    ErrorResponse,
+    GameDetailResponse,
+    GameListResponse,
+    GameSearchResponse,
+)
 from .security import require_api_key
 
 settings = get_settings()
@@ -35,9 +46,34 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="REST API for querying the core and steam warehouse tables.",
+    description=(
+        "SensorTower mobile market-data warehouse API. Use the documented game, app, "
+        "performance, and catalog reads for Portal-facing data access."
+    ),
 )
 protected = APIRouter(dependencies=[Depends(require_api_key)])
+
+PORTAL_PUBLIC_OPENAPI = {"x-portal-public": True}
+PUBLIC_READ_ERRORS = {
+    401: {"model": ErrorResponse, "description": "Missing or invalid X-API-Key."},
+    403: {"model": ErrorResponse, "description": "The authenticated caller is not authorized."},
+    500: {"model": ErrorResponse, "description": "Unexpected warehouse service failure."},
+}
+PUBLIC_DETAIL_ERRORS = {
+    **PUBLIC_READ_ERRORS,
+    404: {"model": ErrorResponse, "description": "The requested game or app was not found."},
+    408: {"model": ErrorResponse, "description": "The warehouse query timed out."},
+}
+
+
+def _public_responses(success_description: str, example: dict[str, Any], *, detail: bool = False) -> dict[int, Any]:
+    return {
+        200: {
+            "description": success_description,
+            "content": {"application/json": {"example": example}},
+        },
+        **(PUBLIC_DETAIL_ERRORS if detail else PUBLIC_READ_ERRORS),
+    }
 
 
 class QueryRequest(BaseModel):
@@ -159,6 +195,29 @@ def build_search_pattern(q: str | None) -> str | None:
     return f"%{cleaned}%" if cleaned else None
 
 
+def custom_openapi() -> dict[str, Any]:
+    """Expose a stable, deployment-derived Portal contract without runtime settings."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=settings.app_name,
+        version=settings.app_version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema["info"].update(
+        {
+            "x-portal-source": "sensortower",
+            "x-portal-contract-version": 1,
+        }
+    )
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
+
+
 @app.get("/")
 def root() -> dict[str, Any]:
     return {
@@ -196,11 +255,23 @@ def health() -> dict[str, str]:
     return {"status": "ok", "database": "ok"}
 
 
-@protected.get("/games/search")
+@protected.get(
+    "/games/search",
+    response_model=GameSearchResponse,
+    tags=["SensorTower games"],
+    summary="Search SensorTower games",
+    description="Find game clusters by display name or canonical app ID. Results are paginated with limit and offset.",
+    operation_id="searchSensorTowerGames",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "Matching SensorTower game clusters.",
+        {"items": [{"unified_app_id": "game-123", "game_name": "Example Game", "canonical_app_id": "com.example.game"}], "limit": 20, "offset": 0},
+    ),
+)
 def search_games(
-    q: str = Query(description="Search by game name or canonical app id."),
-    limit: int | None = Query(default=20, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    q: str = Query(description="Required case-insensitive text to match against game name or canonical app ID."),
+    limit: int | None = Query(default=20, ge=1, le=200, description="Maximum matches to return; defaults to 20."),
+    offset: int = Query(default=0, ge=0, description="Number of matching rows to skip for pagination."),
 ) -> dict[str, Any]:
     query = """
         SELECT
@@ -228,11 +299,23 @@ def search_games(
     return {"items": items, "limit": normalize_limit(limit), "offset": offset}
 
 
-@protected.get("/games")
+@protected.get(
+    "/games",
+    response_model=GameListResponse,
+    tags=["SensorTower games"],
+    summary="List SensorTower game clusters",
+    description="List game clusters with optional text search. Use limit and offset for deterministic pagination.",
+    operation_id="listSensorTowerGames",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "A page of SensorTower game clusters.",
+        {"items": [{"unified_app_id": "game-123", "name": "Example Game", "linked_app_count": 2}], "limit": 50, "offset": 0},
+    ),
+)
 def list_games(
     q: str | None = Query(default=None, description="Search by game name or canonical app id."),
-    limit: int | None = Query(default=None, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=500, description="Maximum rows to return; defaults to the service limit."),
+    offset: int = Query(default=0, ge=0, description="Number of matching rows to skip for pagination."),
 ) -> dict[str, Any]:
     query = """
         SELECT
@@ -275,7 +358,19 @@ def list_games(
     return {"items": items, "limit": normalize_limit(limit), "offset": offset}
 
 
-@protected.get("/meta/catalog")
+@protected.get(
+    "/meta/catalog",
+    response_model=CatalogResponse,
+    tags=["SensorTower metadata"],
+    summary="Get the SensorTower analytics catalog",
+    description="Returns approved analytics objects, columns, grain, semantics, and safe SQL examples for query construction.",
+    operation_id="getSensorTowerCatalog",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "The approved SensorTower analytics catalog.",
+        {"objects": [{"name": "analytics.agg_game_performance_monthly", "object_type": "table", "grain": "game + country + month", "description": "Monthly game performance.", "columns": [], "examples": []}]},
+    ),
+)
 def get_catalog() -> dict[str, Any]:
     metadata_rows = fetch_catalog_columns(list(allowed_catalog_objects()))
     grouped_columns: dict[str, list[dict[str, Any]]] = {}
@@ -420,8 +515,21 @@ def get_chart_artifact(artifact_id: str, token: str = Query(..., min_length=8)) 
     )
 
 
-@protected.get("/games/{unified_app_id}")
-def get_game(unified_app_id: str) -> dict[str, Any]:
+@protected.get(
+    "/games/{unified_app_id}",
+    response_model=GameDetailResponse,
+    tags=["SensorTower games"],
+    summary="Get one SensorTower game cluster",
+    description="Returns game taxonomy, release metadata, and the number of linked mobile apps for one unified game ID.",
+    operation_id="getSensorTowerGame",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "The requested SensorTower game cluster.",
+        {"unified_app_id": "game-123", "name": "Example Game", "linked_app_count": 2},
+        detail=True,
+    ),
+)
+def get_game(unified_app_id: str = Path(description="Unified SensorTower game-cluster identifier.")) -> dict[str, Any]:
     query = """
         SELECT
             g.*,
@@ -464,13 +572,25 @@ def get_game(unified_app_id: str) -> dict[str, Any]:
     return game
 
 
-@protected.get("/apps")
+@protected.get(
+    "/apps",
+    response_model=AppListResponse,
+    tags=["SensorTower apps"],
+    summary="List SensorTower mobile apps",
+    description="List mobile apps with optional name, publisher, platform, and unified-game filters.",
+    operation_id="listSensorTowerApps",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "A page of SensorTower mobile apps.",
+        {"items": [{"app_id": "com.example.game", "name": "Example Game", "os": "android", "unified_app_id": "game-123"}], "limit": 50, "offset": 0},
+    ),
+)
 def list_apps(
     q: str | None = Query(default=None, description="Search by app name, publisher, or app id."),
     os: str | None = Query(default=None, description="Filter by app operating system, for example ios or android."),
     unified_app_id: str | None = Query(default=None, description="Filter to one game cluster."),
-    limit: int | None = Query(default=None, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=500, description="Maximum rows to return; defaults to the service limit."),
+    offset: int = Query(default=0, ge=0, description="Number of matching rows to skip for pagination."),
 ) -> dict[str, Any]:
     query = """
         SELECT
@@ -517,8 +637,21 @@ def list_apps(
     return {"items": items, "limit": normalize_limit(limit), "offset": offset}
 
 
-@protected.get("/apps/{app_id}")
-def get_app(app_id: str) -> dict[str, Any]:
+@protected.get(
+    "/apps/{app_id}",
+    response_model=AppDetailResponse,
+    tags=["SensorTower apps"],
+    summary="Get one SensorTower mobile app",
+    description="Returns app metadata and linked game taxonomy for one SensorTower app ID.",
+    operation_id="getSensorTowerApp",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "The requested SensorTower mobile app.",
+        {"app_id": "com.example.game", "name": "Example Game", "os": "android", "unified_app_id": "game-123"},
+        detail=True,
+    ),
+)
+def get_app(app_id: str = Path(description="Android package name or iOS App Store ID.")) -> dict[str, Any]:
     query = """
         SELECT
             a.*,
@@ -537,13 +670,26 @@ def get_app(app_id: str) -> dict[str, Any]:
     return app_row
 
 
-@protected.get("/apps/{app_id}/performance")
+@protected.get(
+    "/apps/{app_id}/performance",
+    response_model=AppPerformanceResponse,
+    tags=["SensorTower performance"],
+    summary="Get daily app downloads and revenue",
+    description="Returns daily platform-specific download and revenue values for one mobile app, optionally constrained by date and country.",
+    operation_id="getSensorTowerAppPerformance",
+    openapi_extra=PORTAL_PUBLIC_OPENAPI,
+    responses=_public_responses(
+        "Daily performance rows for the requested mobile app.",
+        {"app": {"app_id": "com.example.game", "name": "Example Game"}, "items": [{"app_id": "com.example.game", "date": "2026-09-01", "country_android": "VN", "downloads_android": 120, "revenue_android": 5000}], "count": 1, "limit": 100},
+        detail=True,
+    ),
+)
 def get_app_performance(
-    app_id: str,
-    start_date: date | None = Query(default=None),
-    end_date: date | None = Query(default=None),
+    app_id: str = Path(description="Android package name or iOS App Store ID."),
+    start_date: date | None = Query(default=None, description="Inclusive UTC calendar date; omit for the earliest available date."),
+    end_date: date | None = Query(default=None, description="Inclusive UTC calendar date; omit for the latest available date."),
     country: str | None = Query(default=None, description="Matches either country_android or country_ios."),
-    limit: int | None = Query(default=100, ge=1, le=1000),
+    limit: int | None = Query(default=100, ge=1, le=1000, description="Maximum daily rows to return."),
 ) -> dict[str, Any]:
     app_exists = fetch_one(
         "SELECT app_id, name FROM core.dim_app_info WHERE app_id = %(app_id)s",

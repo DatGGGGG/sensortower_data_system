@@ -5,7 +5,7 @@ Small warehouse workspace for app and game performance data, now with an API lay
 ## Services
 
 - `postgres`: PostgreSQL 16 with the warehouse schemas and mounted `data/` + `sql/`
-- `api`: FastAPI service that exposes read endpoints over the `core` and `steam` schemas
+- `api`: FastAPI service for the SensorTower mobile market-data warehouse, with legacy Steam compatibility reads
 
 ## Run with Docker Compose
 
@@ -17,6 +17,7 @@ Services:
 
 - Postgres: `localhost:5433`
 - API docs: `http://localhost:8000/docs`
+- OpenAPI contract: `http://localhost:8000/openapi.json`
 
 ## API endpoints
 
@@ -34,6 +35,20 @@ Services:
 - `GET /steam/games`
 - `GET /steam/games/{app_id}`
 - `GET /steam/games/{app_id}/performance`
+
+## Portal OpenAPI contract
+
+The deployed `GET /openapi.json` document is the Portal-facing source of truth for
+SensorTower API documentation. The Portal imports only operations explicitly marked
+with `x-portal-public: true`; currently these are the SensorTower game, app,
+performance, and catalog read endpoints. Native SQL routes, health/operational
+routes, chart artifact delivery, and legacy Steam compatibility reads are not part
+of that public Portal contract.
+
+The schema documents native `X-API-Key` authentication. The Portal may present its
+own gateway authentication instructions, but module endpoint semantics and response
+models come from the deployed OpenAPI document. Production Portal documentation only
+changes after this module version is deployed.
 
 ## MCP endpoint
 
