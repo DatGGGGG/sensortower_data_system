@@ -42,7 +42,15 @@ def _bundle(registry: MappingArtifactRegistry, label: str, multiplier: int) -> d
             bottom["id"]: bottom["checksum_sha256"],
         },
     )
-    return {"raw": raw, "enriched": enriched, "bottom": bottom, "full": full}
+    special_cases = registry.bootstrap_import(
+        artifact_type="special_cases",
+        content=(
+            "app_id,cleaned_publisher_name,revenue_multiplier\n"
+            f"com.example.{label.lower()},Special {label},1.25\n"
+        ).encode(),
+        created_by="test",
+    )
+    return {"raw": raw, "enriched": enriched, "bottom": bottom, "full": full, "special_cases": special_cases}
 
 
 class MappingArtifactManifestTests(unittest.TestCase):
@@ -60,11 +68,13 @@ class MappingArtifactManifestTests(unittest.TestCase):
             first = _bundle(registry, "A", 2)
             second = _bundle(registry, "B", 3)
             registry.activate(first["full"]["id"], "test")
+            registry.activate(first["special_cases"]["id"], "test")
 
             path, initial = ensure_mapping_artifact_manifest(
                 registry, output_root=data_root, run_id="run-one", run_timestamp=1
             )
             registry.activate(second["full"]["id"], "test")
+            registry.activate(second["special_cases"]["id"], "test")
             reused_path, reused = ensure_mapping_artifact_manifest(
                 registry, output_root=data_root, run_id="run-one", run_timestamp=1
             )
@@ -75,7 +85,9 @@ class MappingArtifactManifestTests(unittest.TestCase):
             self.assertEqual(path, reused_path)
             self.assertEqual(initial, reused)
             self.assertEqual(reused["full_mapping"]["artifact_id"], first["full"]["id"])
+            self.assertEqual(reused["special_cases"]["artifact_id"], first["special_cases"]["id"])
             self.assertEqual(next_run["full_mapping"]["artifact_id"], second["full"]["id"])
+            self.assertEqual(next_run["special_cases"]["artifact_id"], second["special_cases"]["id"])
 
     def test_concurrent_creation_returns_one_deterministic_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -83,6 +95,7 @@ class MappingArtifactManifestTests(unittest.TestCase):
             registry = MappingArtifactRegistry(data_root)
             bundle = _bundle(registry, "A", 2)
             registry.activate(bundle["full"]["id"], "test")
+            registry.activate(bundle["special_cases"]["id"], "test")
 
             def create() -> dict[str, object]:
                 return ensure_mapping_artifact_manifest(
@@ -105,6 +118,7 @@ class MappingArtifactManifestTests(unittest.TestCase):
             registry = MappingArtifactRegistry(data_root)
             bundle = _bundle(registry, "A", 2)
             registry.activate(bundle["full"]["id"], "test")
+            registry.activate(bundle["special_cases"]["id"], "test")
             ensure_mapping_artifact_manifest(
                 registry, output_root=data_root, run_id="corrupt", run_timestamp=4
             )
@@ -122,6 +136,7 @@ class MappingArtifactManifestTests(unittest.TestCase):
             registry = MappingArtifactRegistry(data_root)
             bundle = _bundle(registry, "A", 2)
             registry.activate(bundle["full"]["id"], "test")
+            registry.activate(bundle["special_cases"]["id"], "test")
             ensure_mapping_artifact_manifest(
                 registry, output_root=data_root, run_id="stable", run_timestamp=5
             )
@@ -129,6 +144,36 @@ class MappingArtifactManifestTests(unittest.TestCase):
                 ensure_mapping_artifact_manifest(
                     registry, output_root=data_root, run_id="stable", run_timestamp=6
                 )
+
+    def test_explicit_legacy_special_cases_fallback_is_pinned_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_root = root / "data"
+            registry = MappingArtifactRegistry(data_root)
+            bundle = _bundle(registry, "A", 2)
+            registry.activate(bundle["full"]["id"], "test")
+            legacy = root / "legacy_special_cases.csv"
+            legacy.write_text(
+                "app_id,cleaned_publisher_name,revenue_multiplier\nexample,,1.25\n", encoding="utf-8"
+            )
+
+            _, manifest = ensure_mapping_artifact_manifest(
+                registry,
+                output_root=data_root,
+                run_id="fallback",
+                run_timestamp=6,
+                legacy_special_cases_path=legacy,
+                allow_legacy_special_cases_fallback=True,
+            )
+
+            self.assertEqual(manifest["special_cases"]["source"], "legacy_fallback")
+            pinned = Path(manifest["special_cases"]["fallback_path"])
+            self.assertTrue(pinned.is_file())
+            legacy.write_text("app_id,cleaned_publisher_name,revenue_multiplier\nexample,changed,2\n", encoding="utf-8")
+            _, reused = ensure_mapping_artifact_manifest(
+                registry, output_root=data_root, run_id="fallback", run_timestamp=6
+            )
+            self.assertEqual(reused, manifest)
 
 
 if __name__ == "__main__":

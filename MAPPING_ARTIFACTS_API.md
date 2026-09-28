@@ -12,6 +12,7 @@ PIPELINE_API_MAX_BODY_BYTES=10485760
 PIPELINE_API_HOST=172.17.0.1
 PIPELINE_API_PORT=8010
 MAPPING_ARTIFACT_MODE=legacy
+MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK=false
 ```
 
 Only `GET /health` is public. Every other route requires:
@@ -36,6 +37,11 @@ publish top_down_raw or bottom_up (committed)
 → review and commit
 → explicitly activate Full
 → artifact-mode staging materializes exact active bytes
+
+publish special_cases (draft)
+→ review and commit
+→ explicitly activate Special Cases
+→ artifact-mode staging pins and materializes it after Full Mapping defaults
 ```
 
 Invalid generated drafts are immutable and downloadable but cannot be committed.
@@ -55,6 +61,7 @@ POST /mapping-artifacts/generate/full
 POST /mapping-artifacts/{artifact_id}/commit
 POST /mapping-artifacts/{artifact_id}/activate
 GET  /mapping-artifacts/active
+GET  /mapping-artifacts/activation-history?type=special_cases
 ```
 
 Only these types may be published directly:
@@ -62,10 +69,13 @@ Only these types may be published directly:
 ```text
 top_down_raw
 bottom_up
+special_cases
 ```
 
-Only generated `top_down_with_publisher_ids` and `full` artifacts may be
-committed. Only committed `full` artifacts may be activated.
+`special_cases` is published as a draft. Generated
+`top_down_with_publisher_ids`/`full` artifacts and published `special_cases`
+artifacts may be committed. Committed `full` and `special_cases` artifacts have
+independent activation pointers.
 
 ## Request And Response Contract
 
@@ -76,7 +86,7 @@ Every artifact response contains the original fields plus these stable aliases:
 
 ```text
 POST /mapping-artifacts/publish
-  artifact_type: top_down_raw | bottom_up
+  artifact_type: top_down_raw | bottom_up | special_cases
   csv_content: exact UTF-8 CSV text
   checksum_sha256: SHA-256 of the exact bytes
   source_workbench_workflow, source_workbench_version_id, created_by: non-empty text
@@ -140,12 +150,12 @@ cd /opt/sensortower_data_system
 source .venv/bin/activate
 
 python scripts/ops/bootstrap_mapping_artifacts.py
-python scripts/ops/bootstrap_mapping_artifacts.py --apply --activate-full --created-by "mapping-bootstrap"
+python scripts/ops/bootstrap_mapping_artifacts.py --apply --activate-full --activate-special-cases --created-by "mapping-bootstrap"
 ```
 
 The first command is a dry run. The second command imports the exact current
-Top Down raw, enriched Top Down, Bottom Up, and Full Mapping CSV bytes and
-activates the imported Full artifact.
+Top Down raw, enriched Top Down, Bottom Up, Full Mapping, and Special Cases CSV
+bytes and activates the imported Full and Special Cases artifacts.
 
 After reviewing the printed IDs and checksums, test the two materialization
 stages manually with `MAPPING_ARTIFACT_MODE=artifact`. Only then set
@@ -156,6 +166,7 @@ Artifact mode materializes these existing downstream-compatible paths:
 ```text
 data/base/st_api_mapping_publisher_to_apps_publisherids_top_down_current.csv
 data/staging/st_mapping_publisher_to_publisherids_revenue_multiplier_full_current.csv
+data/staging/st_mapping_app_to_revenue_multiplier_special_cases_current.csv
 ```
 
 It first materializes the activated Full Mapping byte-for-byte into this
@@ -163,6 +174,7 @@ run-scoped path, then atomically refreshes the legacy current path:
 
 ```text
 data/staging/st_mapping_publisher_to_publisherids_revenue_multiplier_full_<run_timestamp>.csv
+data/staging/st_mapping_app_to_revenue_multiplier_special_cases_<run_timestamp>.csv
 ```
 
 The downstream app-adjustment stage consumes the run-scoped file during a full
@@ -178,6 +190,7 @@ data/base/st_manualsearch_mapping_publisher_to_apps_top_down_<timestamp>.csv
 data/base/st_api_mapping_publisher_to_apps_publisherids_top_down_<timestamp>.csv
 data/base/st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_<timestamp>.csv
 data/staging/st_mapping_publisher_to_publisherids_revenue_multiplier_full_<timestamp>.csv
+data/base/st_manualsearch_mapping_app_to_revenue_multiplier_special_cases_<timestamp>.csv
 ```
 
 The SQLite registry, active pointer, and asynchronous-job records live under
@@ -194,11 +207,11 @@ data/base/st_manualsearch_mapping_publisher_to_apps_top_down_*.csv
 data/base/st_api_mapping_publisher_to_apps_publisherids_top_down_*.csv
 data/base/st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_*.csv
 data/staging/st_mapping_publisher_to_publisherids_revenue_multiplier_full_*.csv
+data/base/st_manualsearch_mapping_app_to_revenue_multiplier_special_cases_*.csv
 ```
 
-Also preserve the two manual inputs still outside the artifact registry:
+Also preserve the Game Info Adjustment manual input outside the artifact registry:
 
 ```text
-manual/mapping_app_to_revenue_multiplier_special_cases_current.csv
 manual/game_info_adjustment_current.csv
 ```

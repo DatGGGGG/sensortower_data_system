@@ -190,13 +190,19 @@ def _mapping_artifact_registry(ctx: PipelineContext) -> MappingArtifactRegistry:
     return registry
 
 
-def _mapping_artifact_manifest(ctx: PipelineContext) -> tuple[Path, dict[str, Any]]:
+def _mapping_artifact_manifest(
+    ctx: PipelineContext, *, legacy_special_cases_path: Path | None = None
+) -> tuple[Path, dict[str, Any]]:
     return ensure_mapping_artifact_manifest(
         _mapping_artifact_registry(ctx),
         output_root=ctx.output_root,
         run_id=ctx.run_id,
         run_timestamp=ctx.run_timestamp,
         manifest_path=ctx.mapping_artifact_manifest_path,
+        legacy_special_cases_path=legacy_special_cases_path,
+        allow_legacy_special_cases_fallback=_coerce_bool(
+            os.environ.get("MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK")
+        ),
     )
 
 
@@ -209,6 +215,8 @@ def _mapping_manifest_metrics(path: Path, manifest: dict[str, Any]) -> dict[str,
         "pinned_full_checksum_sha256": manifest["full_mapping"]["checksum_sha256"],
         "pinned_top_down_artifact_id": manifest["enriched_top_down"]["artifact_id"],
         "pinned_top_down_checksum_sha256": manifest["enriched_top_down"]["checksum_sha256"],
+        "pinned_special_cases_artifact_id": manifest["special_cases"]["artifact_id"],
+        "pinned_special_cases_checksum_sha256": manifest["special_cases"]["checksum_sha256"],
     }
 
 
@@ -285,6 +293,7 @@ def _base_outputs(output_root: Path, run_timestamp: int) -> dict[str, Path]:
 def _staging_outputs(output_root: Path, run_timestamp: int) -> dict[str, Path]:
     return {
         "publisher_revenue_mapping_full": output_root / "staging" / f"st_mapping_publisher_to_publisherids_revenue_multiplier_full_{run_timestamp}.csv",
+        "special_cases": output_root / "staging" / f"st_mapping_app_to_revenue_multiplier_special_cases_{run_timestamp}.csv",
         "app_full_info_adjusted_ndjson": output_root / "staging" / f"st_app_full_info_adjusted_{run_timestamp}.ndjson",
         "app_performance_daily_revenue_adjusted": output_root / "staging" / f"st_app_performance_daily_{run_timestamp}_revenue_adjusted.json",
         "game_full_info_adjusted": output_root / "staging" / f"st_api_game_full_info_{run_timestamp}_adjusted.csv",
@@ -294,6 +303,7 @@ def _staging_outputs(output_root: Path, run_timestamp: int) -> dict[str, Path]:
 def _staging_current_outputs(output_root: Path) -> dict[str, Path]:
     return {
         "publisher_revenue_mapping_full": output_root / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_current.csv",
+        "special_cases": output_root / "staging" / "st_mapping_app_to_revenue_multiplier_special_cases_current.csv",
         "app_full_info_adjusted_ndjson": output_root / "staging" / "st_app_full_info_adjusted_current.ndjson",
         "app_performance_daily_revenue_adjusted": output_root / "staging" / "st_app_performance_daily_revenue_adjusted_current.ndjson",
         "app_active_users_current_ndjson": output_root / "staging" / "st_app_active_users_current.ndjson",
@@ -912,17 +922,32 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
         if mapping_artifact_mode == "artifact"
         else staging_outputs["publisher_revenue_mapping_full"]
     )
+    legacy_special_cases_path = Path(
+        resolved_inputs.get(
+            "mapping_app_to_revenue_multiplier_special_cases",
+            ctx.repo_root / "manual" / "mapping_app_to_revenue_multiplier_special_cases_current.csv",
+        )
+    )
+    special_cases_path = (
+        run_scoped_staging_outputs["special_cases"]
+        if mapping_artifact_mode == "artifact"
+        else legacy_special_cases_path
+    )
     summary = _base_summary(ctx, stage)
     summary["expected_outputs"] = expected_staging_current_output_paths(ctx.output_root)
     if mapping_artifact_mode == "artifact":
         summary["expected_outputs"]["publisher_revenue_mapping_full_run_scoped"] = str(full_mapping_path.resolve())
+        summary["expected_outputs"]["special_cases_run_scoped"] = str(special_cases_path.resolve())
     current_input_files: dict[str, str] = {}
     current_output_files: dict[str, str] = {}
     stage_name = stage_order[0] if stage_order else "unknown"
 
     try:
         if mapping_artifact_mode == "artifact":
-            mapping_manifest_path, mapping_manifest = _mapping_artifact_manifest(ctx)
+            mapping_manifest_path, mapping_manifest = _mapping_artifact_manifest(
+                ctx,
+                legacy_special_cases_path=legacy_special_cases_path,
+            )
             summary["mapping_artifact_manifest"] = str(mapping_manifest_path.resolve())
             summary["mapping_artifact_fingerprint"] = mapping_manifest["mapping_artifact_fingerprint"]
         # Artifact mode materializes reviewed bytes and intentionally does not
@@ -1036,11 +1061,30 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                             full_mapping_path,
                             current_destination=staging_outputs["publisher_revenue_mapping_full"],
                         )
+                        if mapping_manifest["special_cases"].get("source") == "legacy_fallback":
+                            fallback_path = Path(mapping_manifest["special_cases"]["fallback_path"])
+                            temp_path = _temp_path_for_atomic_write(special_cases_path)
+                            shutil.copyfile(fallback_path, temp_path)
+                            _replace_file_atomically(temp_path, special_cases_path)
+                            shutil.copyfile(special_cases_path, staging_outputs["special_cases"])
+                            special_cases_metrics = {
+                                "source_artifact_id": None,
+                                "source_checksum_sha256": mapping_manifest["special_cases"]["checksum_sha256"],
+                                "source_artifact_type": "legacy_fallback",
+                                "row_count": mapping_manifest["special_cases"]["row_count"],
+                                "run_scoped_output_path": str(special_cases_path.resolve()),
+                            }
+                        else:
+                            special_cases_metrics = _mapping_artifact_registry(ctx).materialize_special_cases(
+                                mapping_manifest["special_cases"]["artifact_id"],
+                                special_cases_path,
+                                current_destination=staging_outputs["special_cases"],
+                            )
                     stats = lsdp.adjust_ndjson_app_full_info(
                         input_ndjson_path=str(state_outputs["app_full_info_current"]),
                         output_ndjson_path=str(staging_outputs["app_full_info_adjusted_ndjson"]),
                         publisher_mapping_csv_path=str(full_mapping_path),
-                        special_case_csv_path=resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
+                        special_case_csv_path=str(special_cases_path),
                     )
                     metrics = {
                         "row_count": int(stats["records_written"]),
@@ -1056,11 +1100,12 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                             "run_id": ctx.run_id,
                             "run_timestamp": ctx.run_timestamp,
                             **_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest),
-                            "special_cases_path": resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
-                            "scope_note": "Mapping fingerprint excludes mutable Special Cases and is not a final effective-mapping fingerprint.",
+                            "special_cases_path": str(special_cases_path),
+                            "scope_note": "The mapping fingerprint includes the pinned Full Mapping and Special Cases artifacts.",
                         }
                         _write_json_payload_atomic(provenance_path, provenance)
                         metrics.update(materialize_metrics)
+                        metrics["special_cases_artifact"] = special_cases_metrics
                         metrics.update(_mapping_manifest_metrics(mapping_manifest_path, mapping_manifest))
                         metrics["mapping_provenance_path"] = str(provenance_path.resolve())
                     return metrics
@@ -1068,7 +1113,7 @@ def run_staging_pipeline(ctx: PipelineContext, stage: str = "all") -> dict[str, 
                 current_input_files = {
                     "app_full_info_current": str(state_outputs["app_full_info_current"]),
                     "publisher_revenue_mapping_full": str(full_mapping_path),
-                    "mapping_app_to_revenue_multiplier_special_cases": resolved_inputs["mapping_app_to_revenue_multiplier_special_cases"],
+                    "mapping_app_to_revenue_multiplier_special_cases": str(special_cases_path),
                 }
                 current_output_files = {
                     "app_full_info_adjusted_ndjson": str(staging_outputs["app_full_info_adjusted_ndjson"])

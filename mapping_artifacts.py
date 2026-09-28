@@ -27,9 +27,13 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 
 
-ARTIFACT_TYPES = frozenset({"top_down_raw", "top_down_with_publisher_ids", "bottom_up", "full"})
-PUBLISHED_TYPES = frozenset({"top_down_raw", "bottom_up"})
+ARTIFACT_TYPES = frozenset({"top_down_raw", "top_down_with_publisher_ids", "bottom_up", "full", "special_cases"})
+PUBLISHED_TYPES = frozenset({"top_down_raw", "bottom_up", "special_cases"})
+# Special Cases are supplied by the workbench but still require an explicit
+# review commit before they can be activated.
+DRAFT_PUBLISHED_TYPES = frozenset({"special_cases"})
 GENERATED_TYPES = frozenset({"top_down_with_publisher_ids", "full"})
+ACTIVATABLE_TYPES = frozenset({"full", "special_cases"})
 ARTIFACT_STATUSES = frozenset({"draft", "committed"})
 
 TOP_DOWN_RAW_COLUMNS = (
@@ -55,11 +59,17 @@ BOTTOM_UP_COLUMNS = (
     "revenue_multiplier",
 )
 FULL_COLUMNS = BOTTOM_UP_COLUMNS
+SPECIAL_CASES_COLUMNS = (
+    "app_id",
+    "cleaned_publisher_name",
+    "revenue_multiplier",
+)
 ARTIFACT_STORAGE_SPECS = {
     "top_down_raw": ("base", "st_manualsearch_mapping_publisher_to_apps_top_down"),
     "top_down_with_publisher_ids": ("base", "st_api_mapping_publisher_to_apps_publisherids_top_down"),
     "bottom_up": ("base", "st_manualsearch_mapping_publisher_to_publisherids_revenue_multiplier_bottom_up"),
     "full": ("staging", "st_mapping_publisher_to_publisherids_revenue_multiplier_full"),
+    "special_cases": ("base", "st_manualsearch_mapping_app_to_revenue_multiplier_special_cases"),
 }
 
 
@@ -133,7 +143,25 @@ def _required_columns_for(artifact_type: str) -> tuple[str, ...]:
         return BOTTOM_UP_COLUMNS
     if artifact_type == "full":
         return FULL_COLUMNS
+    if artifact_type == "special_cases":
+        return SPECIAL_CASES_COLUMNS
     raise MappingArtifactError("invalid_artifact_type", f"Unsupported artifact type: {artifact_type}", 422)
+
+
+def canonicalize_csv(artifact_type: str, content: bytes) -> bytes:
+    """Return deterministic bytes for artifact types with record-level identity."""
+    if artifact_type != "special_cases":
+        return content
+    headers, rows = _csv_rows(content)
+    if set(headers) != set(SPECIAL_CASES_COLUMNS) or len(headers) != len(SPECIAL_CASES_COLUMNS):
+        # Keep invalid source bytes intact so validation can return useful errors.
+        return content
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=SPECIAL_CASES_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    for row in sorted(rows, key=lambda item: item["app_id"]):
+        writer.writerow({column: row.get(column, "") for column in SPECIAL_CASES_COLUMNS})
+    return output.getvalue().encode("utf-8")
 
 
 def validate_csv(artifact_type: str, content: bytes) -> dict[str, Any]:
@@ -143,10 +171,13 @@ def validate_csv(artifact_type: str, content: bytes) -> dict[str, Any]:
     headers, rows = _csv_rows(content)
     required_columns = _required_columns_for(artifact_type)
     missing_columns = [column for column in required_columns if column not in headers]
+    unexpected_columns = [column for column in headers if column not in required_columns]
     blocking_errors: list[str] = []
     warnings: list[str] = []
     if missing_columns:
         blocking_errors.append(f"Missing required columns: {', '.join(missing_columns)}")
+    if artifact_type == "special_cases" and unexpected_columns:
+        blocking_errors.append(f"Unexpected columns: {', '.join(unexpected_columns)}")
 
     missing_value_counts = {
         column: sum(1 for row in rows if not _clean(row.get(column)))
@@ -156,6 +187,8 @@ def validate_csv(artifact_type: str, content: bytes) -> dict[str, Any]:
     duplicate_row_count = max(0, len(rows) - len({tuple(row.get(header, "") for header in headers) for row in rows}))
     conflicting_key_count = 0
     unresolved_publisher_id_count = 0
+    invalid_multiplier_count = 0
+    duplicate_app_id_count = 0
 
     if not missing_columns:
         if artifact_type == "top_down_raw":
@@ -238,6 +271,27 @@ def validate_csv(artifact_type: str, content: bytes) -> dict[str, Any]:
                     f"{publisher_name_variation_count} publisher mapping keys have publisher-name casing or label variations."
                 )
 
+        elif artifact_type == "special_cases":
+            blank_app_id_count = sum(1 for row in rows if not _clean(row["app_id"]))
+            if blank_app_id_count:
+                blocking_errors.append(f"{blank_app_id_count} rows have a blank app_id.")
+            app_ids = [_clean(row["app_id"]) for row in rows if _clean(row["app_id"])]
+            duplicate_app_id_count = len(app_ids) - len(set(app_ids))
+            if duplicate_app_id_count:
+                blocking_errors.append(f"{duplicate_app_id_count} duplicate app_id values were found.")
+            for row in rows:
+                multiplier = _clean(row["revenue_multiplier"])
+                if not multiplier:
+                    continue
+                try:
+                    numeric_multiplier = Decimal(multiplier)
+                    if not numeric_multiplier.is_finite() or numeric_multiplier <= 0:
+                        invalid_multiplier_count += 1
+                except (InvalidOperation, ValueError):
+                    invalid_multiplier_count += 1
+            if invalid_multiplier_count:
+                blocking_errors.append(f"{invalid_multiplier_count} rows have an invalid revenue multiplier.")
+
     return {
         "required_columns": list(required_columns),
         "headers": headers,
@@ -246,6 +300,8 @@ def validate_csv(artifact_type: str, content: bytes) -> dict[str, Any]:
         "duplicate_row_count": duplicate_row_count,
         "conflicting_key_count": conflicting_key_count,
         "unresolved_publisher_id_count": unresolved_publisher_id_count,
+        "invalid_multiplier_count": invalid_multiplier_count,
+        "duplicate_app_id_count": duplicate_app_id_count,
         "warnings": warnings,
         "valid": not blocking_errors,
         "blocking_errors": blocking_errors,
@@ -288,7 +344,8 @@ class MappingArtifactRegistry:
                     validation_json TEXT NOT NULL,
                     generator_version TEXT,
                     repository_git_sha TEXT,
-                    bootstrap_import INTEGER NOT NULL DEFAULT 0
+                    bootstrap_import INTEGER NOT NULL DEFAULT 0,
+                    provenance_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE INDEX IF NOT EXISTS artifacts_type_status_idx
                     ON artifacts(artifact_type, status, created_at DESC);
@@ -301,6 +358,17 @@ class MappingArtifactRegistry:
                     activated_by TEXT NOT NULL,
                     FOREIGN KEY(artifact_id) REFERENCES artifacts(id)
                 );
+                CREATE TABLE IF NOT EXISTS artifact_activation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artifact_type TEXT NOT NULL,
+                    previous_artifact_id TEXT,
+                    artifact_id TEXT NOT NULL,
+                    activated_at TEXT NOT NULL,
+                    activated_by TEXT NOT NULL,
+                    FOREIGN KEY(artifact_id) REFERENCES artifacts(id)
+                );
+                CREATE INDEX IF NOT EXISTS artifact_activation_events_type_idx
+                    ON artifact_activation_events(artifact_type, activated_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS artifact_jobs (
                     id TEXT PRIMARY KEY,
                     job_type TEXT NOT NULL,
@@ -318,6 +386,11 @@ class MappingArtifactRegistry:
                     ON artifact_jobs(status, created_at DESC);
                 """
             )
+            # SQLite does not apply new CREATE TABLE columns to existing VM
+            # registries, so upgrade the small metadata schema in place.
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(artifacts)")}
+            if "provenance_json" not in columns:
+                connection.execute("ALTER TABLE artifacts ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'")
 
     def recover_interrupted_jobs(self) -> int:
         """Mark jobs left in memory during a prior API process as retryable failures."""
@@ -364,6 +437,7 @@ class MappingArtifactRegistry:
         artifact["source_artifact_ids"] = _decode_json(artifact.pop("source_artifact_ids_json"), [])
         artifact["source_artifact_checksums"] = _decode_json(artifact.pop("source_artifact_checksums_json"), {})
         artifact["validation"] = _decode_json(artifact.pop("validation_json"), {})
+        artifact["provenance"] = _decode_json(artifact.pop("provenance_json", None), {})
         artifact["bootstrap_import"] = bool(artifact["bootstrap_import"])
         # Keep the original field names while exposing the workbench contract's
         # concise aliases during the transition.
@@ -445,12 +519,14 @@ class MappingArtifactRegistry:
         generator_version: str | None = None,
         repository_git_sha: str | None = None,
         bootstrap_import: bool = False,
+        provenance: Mapping[str, Any] | None = None,
         publish_identity: tuple[str, str, str] | None = None,
     ) -> dict[str, Any]:
         if artifact_type not in ARTIFACT_TYPES:
             raise MappingArtifactError("invalid_artifact_type", f"Unsupported artifact type: {artifact_type}", 422)
         if status not in ARTIFACT_STATUSES:
             raise MappingArtifactError("invalid_artifact_status", f"Unsupported artifact status: {status}", 422)
+        content = canonicalize_csv(artifact_type, content)
         validation = validate_csv(artifact_type, content)
         content_checksum = _sha256(content)
         artifact_id = str(uuid.uuid4())
@@ -493,8 +569,8 @@ class MappingArtifactRegistry:
                         row_count, checksum_sha256, created_at, created_by, committed_at, committed_by,
                         source_workbench_workflow, source_workbench_version_id, source_workbench_version_label,
                         source_artifact_ids_json, source_artifact_checksums_json, validation_json,
-                        generator_version, repository_git_sha, bootstrap_import
-                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        generator_version, repository_git_sha, bootstrap_import, provenance_json
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         artifact_id,
@@ -517,6 +593,7 @@ class MappingArtifactRegistry:
                         _clean(generator_version) or None,
                         _clean(repository_git_sha) or None,
                         int(bootstrap_import),
+                        _json(dict(provenance or {})),
                     ),
                 )
                 connection.execute("COMMIT")
@@ -537,17 +614,27 @@ class MappingArtifactRegistry:
         version_label: str | None,
         created_by: str,
         repository_git_sha: str | None = None,
+        source_artifact_ids: Iterable[str] = (),
+        source_artifact_checksums: Mapping[str, str] | None = None,
+        provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         if artifact_type not in PUBLISHED_TYPES:
-            raise MappingArtifactError("invalid_artifact_type", "Only raw Top Down and Bottom Up artifacts can be published.", 422)
+            raise MappingArtifactError(
+                "invalid_artifact_type", "Only raw Top Down, Bottom Up, and Special Cases artifacts can be published.", 422
+            )
         if not _clean(workflow) or not _clean(version_id):
             raise MappingArtifactError("invalid_request", "A workbench workflow and saved version ID are required.", 422)
-        actual_checksum = _sha256(content)
-        if not supplied_checksum or not hmac.compare_digest(actual_checksum, _clean(supplied_checksum).lower()):
+        original_checksum = _sha256(content)
+        canonical_content = canonicalize_csv(artifact_type, content)
+        actual_checksum = _sha256(canonical_content)
+        supplied = _clean(supplied_checksum).lower()
+        if not supplied_checksum or not (
+            hmac.compare_digest(original_checksum, supplied) or hmac.compare_digest(actual_checksum, supplied)
+        ):
             raise MappingArtifactError("checksum_mismatch", "The supplied checksum does not match the CSV bytes.", 422)
-        validation = validate_csv(artifact_type, content)
-        if validation["blocking_errors"]:
+        validation = validate_csv(artifact_type, canonical_content)
+        if validation["blocking_errors"] and artifact_type not in DRAFT_PUBLISHED_TYPES:
             raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 422)
         with self._connection() as connection:
             rows = connection.execute(
@@ -570,13 +657,20 @@ class MappingArtifactRegistry:
             return existing
         return self._create_artifact(
             artifact_type=artifact_type,
-            content=content,
-            status="committed",
+            content=canonical_content,
+            status="draft" if artifact_type in DRAFT_PUBLISHED_TYPES else "committed",
             created_by=created_by,
             source_workbench_workflow=workflow,
             source_workbench_version_id=version_id,
             source_workbench_version_label=version_label,
+            source_artifact_ids=source_artifact_ids,
+            source_artifact_checksums=source_artifact_checksums,
             repository_git_sha=repository_git_sha,
+            provenance={
+                **dict(provenance or {}),
+                "original_checksum_sha256": original_checksum,
+                "canonical_checksum_sha256": actual_checksum,
+            },
             publish_identity=(artifact_type, workflow, version_id),
         )
 
@@ -666,7 +760,7 @@ class MappingArtifactRegistry:
     def commit(self, artifact_id: str, committed_by: str) -> dict[str, Any]:
         artifact_file = self.read_artifact(artifact_id)
         artifact = artifact_file.artifact
-        if artifact["artifact_type"] not in GENERATED_TYPES:
+        if artifact["artifact_type"] not in GENERATED_TYPES | DRAFT_PUBLISHED_TYPES:
             raise MappingArtifactError("invalid_artifact_state", "Only generated artifacts require review commit.", 409)
         if artifact["status"] == "committed":
             return artifact
@@ -687,42 +781,77 @@ class MappingArtifactRegistry:
         return self.get_artifact(artifact_id)
 
     def activate(self, artifact_id: str, activated_by: str) -> dict[str, Any]:
-        artifact = self._require_committed(artifact_id, "full").artifact
-        for source_id in artifact["source_artifact_ids"]:
-            source = self._require_committed(source_id)
-            expected_checksum = artifact["source_artifact_checksums"].get(source_id)
-            if expected_checksum != source.artifact["checksum_sha256"]:
-                raise MappingArtifactError("artifact_corrupt", "Full Mapping lineage checksum is invalid.", 409)
+        artifact_file = self._require_committed(artifact_id)
+        artifact = artifact_file.artifact
+        artifact_type = artifact["artifact_type"]
+        if artifact_type not in ACTIVATABLE_TYPES:
+            raise MappingArtifactError("invalid_artifact_type", "Only Full Mapping and Special Cases artifacts can be activated.", 409)
+        validation = validate_csv(artifact_type, artifact_file.content)
+        if validation["blocking_errors"]:
+            raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409)
+        if artifact_type == "full":
+            for source_id in artifact["source_artifact_ids"]:
+                source = self._require_committed(source_id)
+                expected_checksum = artifact["source_artifact_checksums"].get(source_id)
+                if expected_checksum != source.artifact["checksum_sha256"]:
+                    raise MappingArtifactError("artifact_corrupt", "Full Mapping lineage checksum is invalid.", 409)
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT artifact_id FROM active_artifacts WHERE artifact_type = ?", (artifact_type,)
+            ).fetchone()
+            previous_artifact_id = previous["artifact_id"] if previous else None
             connection.execute(
                 """
                 INSERT INTO active_artifacts (artifact_type, artifact_id, activated_at, activated_by)
-                VALUES ('full', ?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(artifact_type) DO UPDATE SET
                     artifact_id = excluded.artifact_id,
                     activated_at = excluded.activated_at,
                     activated_by = excluded.activated_by
                 """,
-                (artifact_id, _utc_now(), _clean(activated_by) or "unknown"),
+                (artifact_type, artifact_id, _utc_now(), _clean(activated_by) or "unknown"),
             )
+            if previous_artifact_id != artifact_id:
+                connection.execute(
+                    """
+                    INSERT INTO artifact_activation_events (
+                        artifact_type, previous_artifact_id, artifact_id, activated_at, activated_by
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (artifact_type, previous_artifact_id, artifact_id, _utc_now(), _clean(activated_by) or "unknown"),
+                )
             connection.execute("COMMIT")
         return self.get_active()
 
     def get_active(self) -> dict[str, Any]:
         self.initialize()
         with self._connection() as connection:
-            row = connection.execute("SELECT * FROM active_artifacts WHERE artifact_type = 'full'").fetchone()
-        if row is None:
-            return {"full": None}
-        artifact = self.get_artifact(row["artifact_id"])
-        return {
-            "full": {
-                "artifact": artifact,
+            rows = connection.execute(
+                "SELECT * FROM active_artifacts WHERE artifact_type IN ('full', 'special_cases')"
+            ).fetchall()
+        active: dict[str, Any] = {artifact_type: None for artifact_type in ACTIVATABLE_TYPES}
+        for row in rows:
+            active[row["artifact_type"]] = {
+                "artifact": self.get_artifact(row["artifact_id"]),
                 "activated_at": row["activated_at"],
                 "activated_by": row["activated_by"],
             }
-        }
+        return active
+
+    def list_activation_events(self, artifact_type: str | None = None) -> list[dict[str, Any]]:
+        self.initialize()
+        if artifact_type and artifact_type not in ACTIVATABLE_TYPES:
+            raise MappingArtifactError("invalid_artifact_type", f"Unsupported active artifact type: {artifact_type}", 422)
+        query = "SELECT * FROM artifact_activation_events"
+        params: list[str] = []
+        if artifact_type:
+            query += " WHERE artifact_type = ?"
+            params.append(artifact_type)
+        query += " ORDER BY activated_at DESC, id DESC"
+        with self._connection() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
     def _active_full(self) -> ArtifactFile:
         active = self.get_active()["full"]
@@ -733,6 +862,23 @@ class MappingArtifactRegistry:
                 409,
             )
         return self._require_committed(active["artifact"]["id"], "full")
+
+    def _active_special_cases(self) -> ArtifactFile:
+        active = self.get_active()["special_cases"]
+        if active is None:
+            raise MappingArtifactError(
+                "active_artifact_missing",
+                "No active committed Special Cases artifact exists. Commit and activate Special Cases before artifact-mode staging.",
+                409,
+            )
+        return self._require_committed(active["artifact"]["id"], "special_cases")
+
+    def resolve_special_cases(self, artifact_id: str | None = None) -> dict[str, Any]:
+        special_cases = self._active_special_cases() if artifact_id is None else self._require_committed(artifact_id, "special_cases")
+        validation = validate_csv("special_cases", special_cases.content)
+        if validation["blocking_errors"]:
+            raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409)
+        return special_cases.artifact
 
     def resolve_full_bundle(self, artifact_id: str | None = None) -> dict[str, dict[str, Any]]:
         """Validate immutable bytes and complete lineage for one committed Full Mapping."""
@@ -857,6 +1003,44 @@ class MappingArtifactRegistry:
             "file_size_bytes": len(top_down.content),
         }
 
+    def materialize_active_special_cases(
+        self,
+        destination: str | Path,
+        *,
+        current_destination: str | Path | None = None,
+    ) -> dict[str, Any]:
+        special_cases = self._active_special_cases()
+        return self.materialize_special_cases(
+            special_cases.artifact["id"], destination, current_destination=current_destination
+        )
+
+    def materialize_special_cases(
+        self,
+        artifact_id: str,
+        destination: str | Path,
+        *,
+        current_destination: str | Path | None = None,
+    ) -> dict[str, Any]:
+        artifact_file = self._require_committed(artifact_id, "special_cases")
+        validation = validate_csv("special_cases", artifact_file.content)
+        if validation["blocking_errors"]:
+            raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409)
+        destination_path = Path(destination)
+        self._materialize(artifact_file.content, destination_path)
+        if current_destination is not None:
+            self._materialize(artifact_file.content, Path(current_destination))
+        metrics = {
+            "source_artifact_id": artifact_file.artifact["id"],
+            "source_checksum_sha256": artifact_file.artifact["checksum_sha256"],
+            "source_artifact_type": "special_cases",
+            "row_count": artifact_file.artifact["row_count"],
+            "file_size_bytes": len(artifact_file.content),
+            "run_scoped_output_path": str(destination_path.resolve()),
+        }
+        if current_destination is not None:
+            metrics["current_output_path"] = str(Path(current_destination).resolve())
+        return metrics
+
     def create_job(self, job_type: str, request: Mapping[str, Any]) -> dict[str, Any]:
         self.initialize()
         job_id = str(uuid.uuid4())
@@ -934,8 +1118,11 @@ class MappingArtifactRegistry:
         created_by: str,
         source_artifact_ids: Iterable[str] = (),
         source_artifact_checksums: Mapping[str, str] | None = None,
+        provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Import existing production CSV bytes without recomputing any mapping."""
+        original_checksum = _sha256(content)
+        content = canonicalize_csv(artifact_type, content)
         checksum = _sha256(content)
         self.initialize()
         with self._connection() as connection:
@@ -954,4 +1141,9 @@ class MappingArtifactRegistry:
             source_artifact_checksums=source_artifact_checksums,
             generator_version="bootstrap",
             bootstrap_import=True,
+            provenance={
+                **dict(provenance or {}),
+                "original_checksum_sha256": original_checksum,
+                "canonical_checksum_sha256": checksum,
+            },
         )

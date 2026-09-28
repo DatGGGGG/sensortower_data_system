@@ -218,7 +218,7 @@ SELECT
   core.to_jsonb_loose(r.supported_languages),
   NULLIF(r.country_release_date,'')::timestamptz,
   r.cleaned_publisher_name,
-  NULLIF(r.revenue_multiplier,'')::integer
+  core.to_numeric_loose(r.revenue_multiplier)
 FROM (
   SELECT DISTINCT ON (app_id) *
   FROM raw.dim_app_info_raw

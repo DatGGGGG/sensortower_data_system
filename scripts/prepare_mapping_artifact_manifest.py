@@ -20,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-timestamp", required=True, type=int)
     parser.add_argument("--manifest-path", default=None)
+    parser.add_argument("--legacy-special-cases-path", default=None)
+    parser.add_argument("--allow-legacy-special-cases-fallback", action="store_true")
     return parser.parse_args()
 
 
@@ -36,10 +38,13 @@ if __name__ == "__main__":
         run_id=args.run_id,
         run_timestamp=args.run_timestamp,
         manifest_path=args.manifest_path,
+        legacy_special_cases_path=args.legacy_special_cases_path,
+        allow_legacy_special_cases_fallback=args.allow_legacy_special_cases_fallback,
     )
     print(json.dumps({
         "status": "success",
         "manifest_path": str(path),
         "mapping_artifact_fingerprint": manifest["mapping_artifact_fingerprint"],
         "full_artifact_id": manifest["full_mapping"]["artifact_id"],
+        "special_cases_artifact_id": manifest["special_cases"]["artifact_id"],
     }, indent=2))

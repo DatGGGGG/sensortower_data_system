@@ -216,7 +216,7 @@ SELECT
   core.to_jsonb_loose(r.supported_languages),
   core.to_timestamptz_loose(r.country_release_date),
   r.cleaned_publisher_name,
-  core.to_int_loose(r.revenue_multiplier)
+  core.to_numeric_loose(r.revenue_multiplier)
 FROM (
   SELECT DISTINCT ON (app_id) *
   FROM raw.dim_app_info_raw

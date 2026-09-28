@@ -168,7 +168,7 @@ extracted AS (
     core.to_timestamptz_loose(j->>'country_release_date') AS country_release_date,
 
     j->>'cleaned_publisher_name'                       AS cleaned_publisher_name,
-    core.to_int_loose(j->>'revenue_multiplier')        AS revenue_multiplier
+    core.to_numeric_loose(j->>'revenue_multiplier')    AS revenue_multiplier
   FROM parsed
 ),
 good_app_id AS (

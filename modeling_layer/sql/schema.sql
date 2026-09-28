@@ -277,7 +277,7 @@ CREATE TABLE IF NOT EXISTS core.dim_app_info (
   supported_languages JSONB,
   country_release_date TIMESTAMPTZ,
   cleaned_publisher_name TEXT,
-  revenue_multiplier INTEGER,
+  revenue_multiplier NUMERIC,
   CONSTRAINT pk_dim_app_info PRIMARY KEY (app_id),
   CONSTRAINT fk_dim_app_info_1 FOREIGN KEY (unified_app_id)
     REFERENCES core.dim_game_info(unified_app_id)
@@ -341,6 +341,25 @@ CREATE TABLE IF NOT EXISTS core.fact_app_performance_active_users (
   CONSTRAINT fk_fact_app_performance_active_users_app FOREIGN KEY (app_id)
     REFERENCES core.dim_app_info(app_id)
 );
+
+-- Existing deployments predate decimal Special Cases. Preserve all current
+-- integer values while allowing reviewed fractional revenue multipliers. The
+-- guarded migration avoids rewriting this table on every modeling refresh.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'core'
+      AND table_name = 'dim_app_info'
+      AND column_name = 'revenue_multiplier'
+      AND data_type = 'integer'
+  ) THEN
+    ALTER TABLE core.dim_app_info
+      ALTER COLUMN revenue_multiplier TYPE NUMERIC
+      USING revenue_multiplier::NUMERIC;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_fact_app_perf_active_users_date
   ON core.fact_app_performance_active_users("date");

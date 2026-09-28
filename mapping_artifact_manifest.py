@@ -11,10 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mapping_artifacts import MappingArtifactError, MappingArtifactRegistry
+from mapping_artifacts import MappingArtifactError, MappingArtifactRegistry, canonicalize_csv, validate_csv
 
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 MANIFEST_FILENAME = "mapping_artifact_manifest.json"
 
 
@@ -22,12 +22,14 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _fingerprint(full: dict[str, Any], top_down: dict[str, Any]) -> str:
+def _fingerprint(full: dict[str, Any], top_down: dict[str, Any], special_cases: dict[str, Any]) -> str:
     payload = {
         "full_artifact_id": full["id"],
         "full_checksum_sha256": full["checksum_sha256"],
         "top_down_artifact_id": top_down["id"],
         "top_down_checksum_sha256": top_down["checksum_sha256"],
+        "special_cases_artifact_id": special_cases.get("id") or special_cases.get("artifact_id"),
+        "special_cases_checksum_sha256": special_cases["checksum_sha256"],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -65,6 +67,21 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _read_manifest(path: Path) -> dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -82,6 +99,7 @@ def _validate_existing(
     *,
     run_id: str,
     run_timestamp: int,
+    manifest_path: Path,
 ) -> dict[str, Any]:
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise MappingArtifactError("mapping_manifest_invalid", "Unsupported mapping manifest schema version.", 409)
@@ -95,19 +113,42 @@ def _validate_existing(
         )
     full = manifest.get("full_mapping") or {}
     top_down = manifest.get("enriched_top_down") or {}
+    special_cases = manifest.get("special_cases") or {}
     full_id = str(full.get("artifact_id") or "")
     if not full_id:
         raise MappingArtifactError("mapping_manifest_invalid", "Mapping manifest has no Full Mapping artifact ID.", 409)
     bundle = registry.resolve_full_bundle(full_id)
+    special_cases_id = str(special_cases.get("artifact_id") or "")
+    if special_cases.get("source") == "legacy_fallback":
+        fallback_path = Path(str(special_cases.get("fallback_path") or "")).expanduser().resolve()
+        if fallback_path.parent != manifest_path.parent.resolve() or not fallback_path.is_file():
+            raise MappingArtifactError("mapping_manifest_invalid", "Legacy Special Cases fallback file is missing or unsafe.", 409)
+        fallback_content = canonicalize_csv("special_cases", fallback_path.read_bytes())
+        validation = validate_csv("special_cases", fallback_content)
+        if validation["blocking_errors"] or fallback_path.read_bytes() != fallback_content:
+            raise MappingArtifactError("mapping_manifest_corrupt", "Pinned legacy Special Cases fallback is invalid.", 409)
+        if special_cases.get("checksum_sha256") != hashlib.sha256(fallback_content).hexdigest():
+            raise MappingArtifactError("mapping_manifest_corrupt", "Pinned legacy Special Cases checksum is invalid.", 409)
+        resolved_special_cases = {
+            "artifact_id": None,
+            "checksum_sha256": special_cases["checksum_sha256"],
+            "row_count": validation["row_count"],
+        }
+    else:
+        if not special_cases_id:
+            raise MappingArtifactError("mapping_manifest_invalid", "Mapping manifest has no Special Cases artifact ID.", 409)
+        resolved_special_cases = registry.resolve_special_cases(special_cases_id)
     expected = {
         "full_mapping": bundle["full"],
         "enriched_top_down": bundle["enriched_top_down"],
+        "special_cases": resolved_special_cases,
     }
     for key, artifact in expected.items():
         pinned = manifest.get(key) or {}
-        if pinned.get("artifact_id") != artifact["id"] or pinned.get("checksum_sha256") != artifact["checksum_sha256"]:
+        artifact_id = artifact.get("id") or artifact.get("artifact_id")
+        if pinned.get("artifact_id") != artifact_id or pinned.get("checksum_sha256") != artifact["checksum_sha256"]:
             raise MappingArtifactError("mapping_manifest_corrupt", f"Pinned {key} metadata no longer matches the registry.", 409)
-    fingerprint = _fingerprint(bundle["full"], bundle["enriched_top_down"])
+    fingerprint = _fingerprint(bundle["full"], bundle["enriched_top_down"], resolved_special_cases)
     if manifest.get("mapping_artifact_fingerprint") != fingerprint:
         raise MappingArtifactError("mapping_manifest_corrupt", "Mapping artifact fingerprint is invalid.", 409)
     if top_down.get("artifact_id") != bundle["enriched_top_down"]["id"]:
@@ -123,6 +164,8 @@ def ensure_mapping_artifact_manifest(
     run_timestamp: int,
     manifest_path: str | Path | None = None,
     lock_timeout_seconds: float = 30.0,
+    legacy_special_cases_path: str | Path | None = None,
+    allow_legacy_special_cases_fallback: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Create once from the active pointer, then always revalidate by pinned ID."""
     expected_root = (Path(output_root).expanduser().resolve() / "logs").resolve()
@@ -160,11 +203,41 @@ def ensure_mapping_artifact_manifest(
                 _read_manifest(path),
                 run_id=run_id,
                 run_timestamp=run_timestamp,
+                manifest_path=path,
             )
         bundle = registry.resolve_full_bundle()
         full = bundle["full"]
         top_down = bundle["enriched_top_down"]
         bottom_up = bundle["bottom_up"]
+        try:
+            special_cases = registry.resolve_special_cases()
+            special_cases_manifest = {
+                "artifact_id": special_cases["id"],
+                "checksum_sha256": special_cases["checksum_sha256"],
+                "row_count": special_cases["row_count"],
+            }
+        except MappingArtifactError as exc:
+            if exc.code != "active_artifact_missing" or not allow_legacy_special_cases_fallback or not legacy_special_cases_path:
+                raise
+            legacy_path = Path(legacy_special_cases_path).expanduser().resolve()
+            if not legacy_path.is_file():
+                raise MappingArtifactError("input_missing", "Legacy Special Cases fallback file is missing.", 409) from exc
+            legacy_content = canonicalize_csv("special_cases", legacy_path.read_bytes())
+            validation = validate_csv("special_cases", legacy_content)
+            if validation["blocking_errors"]:
+                raise MappingArtifactError("validation_failed", "; ".join(validation["blocking_errors"]), 409) from exc
+            fallback_path = path.parent / "special_cases_legacy_fallback.csv"
+            _write_bytes_atomic(fallback_path, legacy_content)
+            special_cases = {
+                "artifact_id": None,
+                "checksum_sha256": hashlib.sha256(legacy_content).hexdigest(),
+                "row_count": validation["row_count"],
+            }
+            special_cases_manifest = {
+                **special_cases,
+                "source": "legacy_fallback",
+                "fallback_path": str(fallback_path.resolve()),
+            }
         manifest = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "run_id": run_id,
@@ -186,8 +259,9 @@ def ensure_mapping_artifact_manifest(
                 "checksum_sha256": bottom_up["checksum_sha256"],
                 "row_count": bottom_up["row_count"],
             },
-            "mapping_artifact_fingerprint": _fingerprint(full, top_down),
-            "scope_note": "Fingerprint covers Full Mapping and enriched Top Down only; mutable Special Cases are not included.",
+            "special_cases": special_cases_manifest,
+            "mapping_artifact_fingerprint": _fingerprint(full, top_down, special_cases),
+            "scope_note": "Fingerprint covers Full Mapping, enriched Top Down, and active Special Cases.",
         }
         _write_json_atomic(path, manifest)
         return path, manifest

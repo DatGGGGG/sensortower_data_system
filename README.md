@@ -71,7 +71,7 @@ token before making this API reachable from another container or host.
 
 The reviewed mapping-artifact registry is documented in
 [MAPPING_ARTIFACTS_API.md](MAPPING_ARTIFACTS_API.md). It supports immutable
-Top Down, Bottom Up, generated publisher-ID, and Full Mapping artifacts.
+Top Down, Bottom Up, generated publisher-ID, Full Mapping, and Special Cases artifacts.
 
 Scheduled staging remains in legacy behavior until
 `MAPPING_ARTIFACT_MODE=artifact` is configured. Before that cutover, import the

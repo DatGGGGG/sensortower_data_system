@@ -336,11 +336,14 @@ ops_modeling_compose_project() {
 
 ops_require_manual_inputs() {
   ops_require_file "$GAME_INFO_ADJUSTMENT_PATH" "game info adjustment mapping"
-  ops_require_file "$MAPPING_APP_SPECIAL_CASES_PATH" "app revenue multiplier special cases mapping"
   if [[ "${MAPPING_ARTIFACT_MODE:-legacy}" == "artifact" ]]; then
     local artifact_data_root="${PIPELINE_DATA_ROOT:-${OUTPUT_ROOT}}"
     ops_require_file "${artifact_data_root}/mapping_artifacts/registry.sqlite3" "mapping artifact registry"
+    if [[ "${MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK:-false}" == "true" || "${MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK:-false}" == "1" ]]; then
+      ops_require_file "$MAPPING_APP_SPECIAL_CASES_PATH" "legacy Special Cases fallback mapping"
+    fi
   else
+    ops_require_file "$MAPPING_APP_SPECIAL_CASES_PATH" "app revenue multiplier special cases mapping"
     ops_require_file "$MAPPING_PUBLISHER_TO_APPS_TOP_DOWN_PATH" "publisher-to-apps top-down mapping"
     ops_require_file "$MAPPING_PUBLISHER_BOTTOM_UP_PATH" "publisher bottom-up mapping"
   fi
@@ -351,10 +354,18 @@ ops_prepare_mapping_artifact_manifest() {
     return 0
   fi
   local manifest_path="${MAPPING_ARTIFACT_MANIFEST_PATH:-${OUTPUT_ROOT}/logs/${RUN_ID}/mapping_artifact_manifest.json}"
+  local fallback_args=()
+  if [[ "${MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK:-false}" == "true" || "${MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK:-false}" == "1" ]]; then
+    fallback_args=(
+      --allow-legacy-special-cases-fallback
+      --legacy-special-cases-path "$MAPPING_APP_SPECIAL_CASES_PATH"
+    )
+  fi
   ops_run "$(ops_python)" "${ROOT_DIR}/scripts/prepare_mapping_artifact_manifest.py" \
     --output-root "$OUTPUT_ROOT" \
     --run-id "$RUN_ID" \
     --run-timestamp "$RUN_TIMESTAMP" \
-    --manifest-path "$manifest_path"
+    --manifest-path "$manifest_path" \
+    "${fallback_args[@]}"
   export MAPPING_ARTIFACT_MANIFEST_PATH="$manifest_path"
 }

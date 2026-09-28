@@ -596,6 +596,13 @@ def _required_text(payload: dict[str, Any], field: str) -> str:
     return value
 
 
+def _required_text_alias(payload: dict[str, Any], canonical_field: str, alias_field: str) -> str:
+    value = str(payload.get(canonical_field) or payload.get(alias_field) or "").strip()
+    if not value:
+        raise MappingArtifactError("invalid_request", f"Missing required field: {canonical_field}", HTTPStatus.UNPROCESSABLE_ENTITY)
+    return value
+
+
 def _route_publish_mapping_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     csv_content = payload.get("csv_content")
     if not isinstance(csv_content, str):
@@ -604,11 +611,16 @@ def _route_publish_mapping_artifact(payload: dict[str, Any]) -> dict[str, Any]:
         artifact_type=_required_text(payload, "artifact_type"),
         content=csv_content.encode("utf-8"),
         supplied_checksum=_required_text(payload, "checksum_sha256"),
-        workflow=_required_text(payload, "source_workbench_workflow"),
-        version_id=_required_text(payload, "source_workbench_version_id"),
-        version_label=str(payload.get("source_workbench_version_label", "")).strip() or None,
+        workflow=_required_text_alias(payload, "source_workbench_workflow", "workflow"),
+        version_id=_required_text_alias(payload, "source_workbench_version_id", "version_id"),
+        version_label=str(
+            payload.get("source_workbench_version_label") or payload.get("version_label") or ""
+        ).strip() or None,
         created_by=_required_text(payload, "created_by"),
         repository_git_sha=_repository_git_sha(),
+        source_artifact_ids=payload.get("source_artifact_ids", []),
+        source_artifact_checksums=payload.get("source_artifact_checksums") or {},
+        provenance=payload.get("provenance") or {},
     )
     return {"status": "success", "artifact": artifact}
 
@@ -720,6 +732,13 @@ class PipelineApiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/mapping-artifacts/active":
                 _json_response(self, HTTPStatus.OK, {"status": "success", "active": _artifact_registry().get_active()})
+                return
+            if parsed.path == "/mapping-artifacts/activation-history":
+                query = parse_qs(parsed.query)
+                events = _artifact_registry().list_activation_events(
+                    artifact_type=(query.get("type") or query.get("artifact_type") or [None])[0]
+                )
+                _json_response(self, HTTPStatus.OK, {"status": "success", "events": events})
                 return
             if parsed.path.startswith("/mapping-artifacts/jobs/"):
                 job_id = parsed.path.removeprefix("/mapping-artifacts/jobs/")

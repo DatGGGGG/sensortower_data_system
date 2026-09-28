@@ -4,12 +4,15 @@ These scripts are the production path while n8n is out of scope. Run them from W
 
 ## Required Manual Files
 
-Keep these stable current files under `manual/`:
+Legacy mode requires these stable current files under `manual/`:
 
 - `manual/game_info_adjustment_current.csv`
 - `manual/mapping_publisher_to_apps_top_down_current.csv`
 - `manual/mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_current.csv`
 - `manual/mapping_app_to_revenue_multiplier_special_cases_current.csv`
+
+Artifact mode still requires `game_info_adjustment_current.csv`; Top Down, Bottom
+Up, Full Mapping, and Special Cases are read from the pinned artifact manifest.
 
 ## Manual Checks
 
@@ -247,7 +250,8 @@ bash scripts/ops/run_quarterly_pipeline.sh
 ## Artifact-mode mapping pinning
 
 With `MAPPING_ARTIFACT_MODE=artifact`, every daily, weekly, and quarterly run
-validates the active committed Full Mapping and its complete lineage before any
+validates the active committed Full Mapping, its complete lineage, and the
+independently active committed Special Cases artifact before any
 SensorTower extraction starts. The selected bundle is pinned in:
 
 ```text
@@ -261,6 +265,9 @@ There is intentionally no automatic reset: start a new run ID to adopt a newly
 activated mapping. Do not delete or edit a production run manifest after source
 extraction has started.
 
-The manifest fingerprint covers the Full Mapping and enriched Top Down artifact
-only. The legacy Special Cases CSV is still applied afterward and is not part of
-the fingerprint until the separate Special Cases artifact phase is implemented.
+The manifest fingerprint covers the Full Mapping, enriched Top Down, and Special
+Cases artifact. The app-adjustment stage materializes a run-scoped Special Cases
+CSV from that pinned artifact, so an activation made mid-run only affects a new
+run ID. `MAPPING_ARTIFACT_SPECIAL_CASES_LEGACY_FALLBACK=true` is a temporary
+migration escape hatch; it is disabled by default and copies the legacy CSV into
+the run directory before staging continues.

@@ -16,6 +16,7 @@ import pipeline_api
 
 
 TOP_DOWN_RAW = "os,cleaned_publisher_name,game_name,sensor_tower_link,app_id_trimmed\nandroid,Publisher A,Game A,https://example.test/app,com.example.a\n"
+SPECIAL_CASES = "app_id,cleaned_publisher_name,revenue_multiplier\ncom.example.a,,1.25\n"
 
 
 class MappingArtifactApiTests(unittest.TestCase):
@@ -88,6 +89,35 @@ class MappingArtifactApiTests(unittest.TestCase):
             status, payload = self.request("GET", "/mapping-artifacts")
         self.assertEqual(status, 503)
         self.assertEqual(payload["error_code"], "service_not_configured")
+
+    def test_special_cases_publish_commit_activate_and_history(self) -> None:
+        status, payload = self.request(
+            "POST",
+            "/mapping-artifacts/publish",
+            {
+                "artifact_type": "special_cases",
+                "csv_content": SPECIAL_CASES,
+                "checksum_sha256": hashlib.sha256(SPECIAL_CASES.encode("utf-8")).hexdigest(),
+                "workflow": "special_cases",
+                "version_id": "fixture-special-1",
+                "created_by": "tester",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["artifact"]["status"], "draft")
+        artifact_id = payload["artifact"]["id"]
+
+        status, payload = self.request("POST", f"/mapping-artifacts/{artifact_id}/commit", {"committed_by": "reviewer"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["artifact"]["status"], "committed")
+
+        status, payload = self.request("POST", f"/mapping-artifacts/{artifact_id}/activate", {"activated_by": "admin"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["active"]["special_cases"]["artifact"]["id"], artifact_id)
+
+        status, payload = self.request("GET", "/mapping-artifacts/activation-history?type=special_cases")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["events"][0]["artifact_id"], artifact_id)
 
 
 if __name__ == "__main__":

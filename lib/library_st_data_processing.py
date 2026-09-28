@@ -7,6 +7,7 @@ from math import ceil
 import copy
 import random
 from datetime import datetime, timedelta, date
+from decimal import Decimal, InvalidOperation
 import time
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -58,6 +59,24 @@ def _to_int_or_none(x) -> Optional[int]:
         return int(float(s))  # handles "1", "1.0"
     except Exception:
         return None
+
+
+def _to_positive_decimal_or_none(x) -> Optional[int | float]:
+    """Parse the Special Cases multiplier without truncating decimal factors."""
+    if x is None:
+        return None
+    value = str(x).strip()
+    if not value:
+        return None
+    try:
+        number = Decimal(value)
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite() or number <= 0:
+        return None
+    if number == number.to_integral_value():
+        return int(number)
+    return float(number)
 
 def chunk_list(lst, chunk_size):
     """
@@ -2465,7 +2484,7 @@ def apply_game_info_adjustments(df_game_full_info: pd.DataFrame,
 
 # New set of functions for adjusting App Full Info (NDJSON to NDJSON instead of csv to csv)
 
-def build_publisher_maps(mapping_csv_path: str) -> Tuple[Dict[str, str], Dict[str, int]]:
+def build_publisher_maps(mapping_csv_path: str) -> Tuple[Dict[str, str], Dict[str, int | float]]:
     """
     Build:
       - dict_publisher_id_cleaned_publisher_name: publisher_id(str) -> cleaned_publisher_name(str)
@@ -2473,7 +2492,7 @@ def build_publisher_maps(mapping_csv_path: str) -> Tuple[Dict[str, str], Dict[st
     Mirrors your pandas mapping logic (publisher_id-based).
     """
     dict_publisher_id_cleaned_publisher_name: Dict[str, str] = {}
-    dict_publisher_id_revenue_multiplier: Dict[str, int] = {}
+    dict_publisher_id_revenue_multiplier: Dict[str, int | float] = {}
 
     with open(mapping_csv_path, "r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
@@ -2487,7 +2506,7 @@ def build_publisher_maps(mapping_csv_path: str) -> Tuple[Dict[str, str], Dict[st
                 cleaned = ""
             cleaned = str(cleaned)
 
-            rm = _to_int_or_none(row.get("revenue_multiplier"))
+            rm = _to_positive_decimal_or_none(row.get("revenue_multiplier"))
             if rm is None:
                 rm = 1
 
@@ -2517,7 +2536,7 @@ def build_special_case_map(special_case_csv_path: str) -> Dict[str, Dict[str, An
             if cleaned is None:
                 cleaned = ""
 
-            rm = _to_int_or_none(row.get("revenue_multiplier"))
+            rm = _to_positive_decimal_or_none(row.get("revenue_multiplier"))
             # if missing in special-case row, we keep None so we can "not override" if you prefer
             out[app_id] = {
                 "cleaned_publisher_name": str(cleaned),
@@ -2530,7 +2549,7 @@ def build_special_case_map(special_case_csv_path: str) -> Dict[str, Dict[str, An
 def add_cleaned_publisher_name_and_revenue_multiplier_to_app_full_info_obj(
     obj: Dict[str, Any],
     dict_publisher_id_cleaned_publisher_name: Dict[str, str],
-    dict_publisher_id_revenue_multiplier: Dict[str, int],
+    dict_publisher_id_revenue_multiplier: Dict[str, int | float],
 ) -> Dict[str, Any]:
     """
     Record-level version of add_cleaned_publisher_name_and_revenue_multiplier_to_app_full_info().

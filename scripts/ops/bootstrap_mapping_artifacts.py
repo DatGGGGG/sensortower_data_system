@@ -36,9 +36,18 @@ def parse_args() -> argparse.Namespace:
         "--full",
         default=str(REPO_ROOT / "data" / "staging" / "st_mapping_publisher_to_publisherids_revenue_multiplier_full_current.csv"),
     )
+    parser.add_argument(
+        "--special-cases",
+        default=str(REPO_ROOT / "manual" / "mapping_app_to_revenue_multiplier_special_cases_current.csv"),
+    )
     parser.add_argument("--created-by", default="bootstrap")
     parser.add_argument("--apply", action="store_true", help="Write immutable artifacts. Without this flag, only validate.")
     parser.add_argument("--activate-full", action="store_true", help="Activate the imported Full Mapping; requires --apply.")
+    parser.add_argument(
+        "--activate-special-cases",
+        action="store_true",
+        help="Activate imported Special Cases; requires --apply.",
+    )
     return parser.parse_args()
 
 
@@ -52,14 +61,15 @@ def read_input(path_text: str, artifact_type: str) -> tuple[Path, bytes, dict]:
 
 def main() -> int:
     args = parse_args()
-    if args.activate_full and not args.apply:
-        raise MappingArtifactError("invalid_request", "--activate-full requires --apply.", 2)
+    if (args.activate_full or args.activate_special_cases) and not args.apply:
+        raise MappingArtifactError("invalid_request", "Activation flags require --apply.", 2)
     data_root = Path(args.data_root).expanduser().resolve() if args.data_root else REPO_ROOT / "data"
     inputs = {
         "top_down_raw": read_input(args.top_down_raw, "top_down_raw"),
         "top_down_with_publisher_ids": read_input(args.top_down_enriched, "top_down_with_publisher_ids"),
         "bottom_up": read_input(args.bottom_up, "bottom_up"),
         "full": read_input(args.full, "full"),
+        "special_cases": read_input(args.special_cases, "special_cases"),
     }
     report = {
         artifact_type: {
@@ -72,7 +82,7 @@ def main() -> int:
     print(json.dumps({"mode": "apply" if args.apply else "dry_run", "inputs": report}, ensure_ascii=False, indent=2))
     bootstrap_blockers = [
         artifact_type
-        for artifact_type in ("top_down_raw", "bottom_up", "full")
+        for artifact_type in ("top_down_raw", "bottom_up", "full", "special_cases")
         if not inputs[artifact_type][2]["valid"]
     ]
     if bootstrap_blockers:
@@ -119,8 +129,21 @@ def main() -> int:
             bottom_up["id"]: bottom_up["checksum_sha256"],
         },
     )
+    special_cases_path, special_cases_content, _ = inputs["special_cases"]
+    special_cases = registry.bootstrap_import(
+        artifact_type="special_cases",
+        content=special_cases_content,
+        created_by=args.created_by,
+        provenance={
+            "workflow": "legacy_special_cases_import",
+            "original_filename": special_cases_path.name,
+            "source_path_hint": "manual/mapping_app_to_revenue_multiplier_special_cases_current.csv",
+        },
+    )
     if args.activate_full:
         active = registry.activate(full["id"], args.created_by)
+    if args.activate_special_cases:
+        active = registry.activate(special_cases["id"], args.created_by)
     else:
         active = registry.get_active()
     print(
@@ -130,6 +153,7 @@ def main() -> int:
                 "top_down_with_publisher_ids_id": enriched["id"],
                 "bottom_up_id": bottom_up["id"],
                 "full_id": full["id"],
+                "special_cases_id": special_cases["id"],
                 "active": active,
             },
             ensure_ascii=False,

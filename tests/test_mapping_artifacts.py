@@ -7,13 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 
-from mapping_artifacts import MappingArtifactError, MappingArtifactRegistry, validate_csv
+from mapping_artifacts import MappingArtifactError, MappingArtifactRegistry, canonicalize_csv, validate_csv
 
 
 TOP_DOWN_RAW = b"os,cleaned_publisher_name,game_name,sensor_tower_link,app_id_trimmed\nandroid,Publisher A,Game A,https://example.test/app,com.example.a\n"
 TOP_DOWN_ENRICHED = b"os_x,cleaned_publisher_name,game_name,sensor_tower_link,app_id_trimmed,publisher_id,publisher_name\nandroid,Publisher A,Game A,https://example.test/app,com.example.a,publisher-a,Publisher A\n"
 BOTTOM_UP = b"cleaned_publisher_name,publisher_id,publisher_name,revenue_multiplier\nPublisher A,publisher-a,Publisher A,3\nPublisher A,publisher-b,Publisher B,15\n"
 FULL = BOTTOM_UP
+SPECIAL_CASES = b"app_id,cleaned_publisher_name,revenue_multiplier\ncom.example.a,,1.25\n123,Publisher B,\n"
 
 
 class MappingArtifactRegistryTests(unittest.TestCase):
@@ -31,7 +32,7 @@ class MappingArtifactRegistryTests(unittest.TestCase):
             artifact_type=artifact_type,
             content=content,
             supplied_checksum=hashlib.sha256(content).hexdigest(),
-            workflow="top_down" if artifact_type == "top_down_raw" else "bottom_up",
+            workflow="top_down" if artifact_type == "top_down_raw" else ("special_cases" if artifact_type == "special_cases" else "bottom_up"),
             version_id=version_id,
             version_label="Fixture",
             created_by="tester",
@@ -198,7 +199,7 @@ class MappingArtifactRegistryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MappingArtifactError, "Artifact must be committed"):
             self.registry.activate(draft["id"], "admin")
-        with self.assertRaisesRegex(MappingArtifactError, "Expected full"):
+        with self.assertRaisesRegex(MappingArtifactError, "Only Full Mapping and Special Cases"):
             self.registry.activate(bottom_up["id"], "admin")
 
         committed = self.registry.commit(draft["id"], "reviewer")
@@ -264,6 +265,37 @@ class MappingArtifactRegistryTests(unittest.TestCase):
         self.assertFalse(enriched_validation["valid"])
         self.assertEqual(enriched_validation["unresolved_publisher_id_count"], 1)
         self.assertIn("unresolved publisher IDs or names", enriched_validation["blocking_errors"][0])
+
+    def test_special_cases_canonicalization_lifecycle_and_independent_activation(self) -> None:
+        noncanonical = b"revenue_multiplier,app_id,cleaned_publisher_name\r\n,123,Publisher B\r\n1.25,com.example.a,\r\n"
+        draft = self.publish("special_cases", noncanonical, "special-v1")
+        self.assertEqual(draft["status"], "draft")
+        self.assertEqual(draft["validation"]["row_count"], 2)
+        self.assertEqual(draft["checksum_sha256"], hashlib.sha256(canonicalize_csv("special_cases", noncanonical)).hexdigest())
+        self.assertEqual(
+            self.registry.read_artifact(draft["id"]).content,
+            b"app_id,cleaned_publisher_name,revenue_multiplier\n123,Publisher B,\ncom.example.a,,1.25\n",
+        )
+
+        committed = self.registry.commit(draft["id"], "reviewer")
+        active = self.registry.activate(committed["id"], "admin")
+        self.assertEqual(active["special_cases"]["artifact"]["id"], committed["id"])
+        self.assertIsNone(active["full"])
+        destination = self.root / "staging" / "special_cases.csv"
+        self.registry.materialize_active_special_cases(destination)
+        self.assertEqual(destination.read_bytes(), self.registry.read_artifact(committed["id"]).content)
+        self.assertEqual(len(self.registry.list_activation_events("special_cases")), 1)
+
+    def test_special_cases_validation_rejects_invalid_values_and_duplicate_app_ids(self) -> None:
+        invalid = b"app_id,cleaned_publisher_name,revenue_multiplier\na,Publisher,0\na,Publisher,NaN\n"
+        validation = validate_csv("special_cases", invalid)
+        self.assertFalse(validation["valid"])
+        self.assertEqual(validation["duplicate_app_id_count"], 1)
+        self.assertEqual(validation["invalid_multiplier_count"], 2)
+        draft = self.publish("special_cases", invalid, "invalid-special")
+        self.assertEqual(draft["status"], "draft")
+        with self.assertRaisesRegex(MappingArtifactError, "duplicate app_id"):
+            self.registry.commit(draft["id"], "reviewer")
 
 
 if __name__ == "__main__":
